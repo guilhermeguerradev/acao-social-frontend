@@ -152,7 +152,7 @@ export const endpoints = {
     api<Beneficiario>(`/beneficiarios/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteUser: (id: string) => api<null>(`/users/${id}`, { method: "DELETE" }),
   deleteBeneficiario: (id: string) => api<null>(`/beneficiarios/${id}`, { method: "DELETE" }),
-  createConsulta: (payload: { beneficiarioId: string; dataHora: string }) =>
+  createConsulta: (payload: { beneficiarioId: string; dataHora: string; medicoId?: string }) =>
     api<Consulta>("/consultas", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -165,7 +165,7 @@ export const endpoints = {
   deleteConsulta: (id: string) => api<null>(`/consultas/${id}`, { method: "DELETE" }),
   getAula: (id: string, signal?: AbortSignal) =>
     api<unknown>(`/aulas/${encodeURIComponent(id)}`, { signal }).then(value => parseRecord<Aula>(value, "aulas")),
-  createAula: (payload: { titulo: string; modalidade: string; vagas: number }) =>
+  createAula: (payload: { titulo: string; modalidade: string; vagas: number; instrutorId?: string }) =>
     api<Aula>("/aulas", {
       method: "POST",
       body: JSON.stringify(payload),

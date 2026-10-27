@@ -1,4 +1,4 @@
-export type Role = "MEDICO" | "INSTRUTOR" | null;
+export type Role = "ADMIN" | "MEDICO" | "INSTRUTOR" | null;
 
 export type SessionUser = {
   id: string;
@@ -13,6 +13,7 @@ export type Session = {
 };
 
 export type User = {
+  isAdmin?: boolean;
   id: string;
   name: string;
   email: string;

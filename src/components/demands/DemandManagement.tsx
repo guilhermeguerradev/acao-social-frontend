@@ -17,7 +17,7 @@ export function DemandManagement({ role, revision, onRegister }: { role: Role; r
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const listing = useListing<Demand>("demandas", `${revision}:${attempt}`, selectedId === null);
-  const professional = role === "MEDICO" || role === "INSTRUTOR";
+  const professional = role === "ADMIN" || role === "MEDICO" || role === "INSTRUTOR";
   const { options } = useDemandOptions();
   if (selectedId) return <DemandDetails key={selectedId} demandId={selectedId} onBack={() => setSelectedId(null)} />;
 

@@ -163,13 +163,24 @@ test('a delayed 401 from the old session cannot clear a newer login', async () =
   assert.deepEqual(events, []);
 });
 
-test('401, 404 and 500 reject listings instead of returning successful empty pages', async () => {
-  for (const status of [401, 404, 500]) {
+test('401, 404, 500 and 503 reject listings instead of returning successful empty pages', async () => {
+  for (const status of [401, 404, 500, 503]) {
     const failure = { error: `Falha ${status}` };
     const { endpoints, storage } = client(async () => response(failure, status));
     await assert.rejects(endpoints.list('demandas'), error => error === failure);
     assert.equal(storage.has('acao-social:token'), status !== 401);
   }
+});
+
+test('administrator sessions are accepted and a demand outage preserves their authentication', async () => {
+  const session = { token: 'admin-token', user: { id: 'admin', name: 'Administrador', email: 'admin@example.test', role: 'ADMIN' } };
+  const login = client(async () => response(session));
+  assert.equal((await login.endpoints.login('admin@example.test', 'not-a-real-password')).user.role, 'ADMIN');
+  const failure = { error: 'O modulo de demandas esta temporariamente indisponivel. Tente novamente mais tarde.', code: 'DEMANDS_UNAVAILABLE' };
+  const outage = client(async () => response(failure, 503));
+  await assert.rejects(outage.endpoints.list('demandas'), error => error === failure);
+  assert.equal(outage.storage.get('acao-social:token'), 'token');
+  assert.deepEqual(outage.events, []);
 });
 
 test('malformed rows, demand options and non-JSON success responses are visible errors', async () => {

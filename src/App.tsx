@@ -68,6 +68,7 @@ const tabs = [
 ] satisfies { value: ActiveTab; label: string }[];
 
 function roleLabel(role: Role) {
+  if (role === "ADMIN") return "Administrador";
   if (role === "MEDICO") return "Medico";
   if (role === "INSTRUTOR") return "Instrutor";
   return "Sem perfil";
@@ -181,7 +182,7 @@ function App() {
     );
   }
 
-  const canManageUsers = session.user.role === "MEDICO" || session.user.role === "INSTRUTOR";
+  const canManageUsers = session.user.role === "ADMIN" || session.user.role === "MEDICO" || session.user.role === "INSTRUTOR";
 
   return (
     <div className="min-h-screen">
@@ -404,9 +405,9 @@ function Dashboard({ data, role }: { data: DashboardData; role: Role }) {
             <CardDescription>Os botoes respeitam o papel retornado no login.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 text-sm">
-            <Permission allowed={role === "MEDICO"} label="Criar, reagendar e remover consultas proprias." />
-            <Permission allowed={role === "INSTRUTOR"} label="Criar, editar e remover aulas proprias." />
-            <Permission allowed={role === "MEDICO" || role === "INSTRUTOR"} label="Gerenciar usuarios e perfis." />
+            <Permission allowed={role === "ADMIN" || role === "MEDICO"} label="Gerenciar consultas conforme seu perfil." />
+            <Permission allowed={role === "ADMIN" || role === "INSTRUTOR"} label="Gerenciar aulas conforme seu perfil." />
+            <Permission allowed={role === "ADMIN" || role === "MEDICO" || role === "INSTRUTOR"} label="Gerenciar usuarios e perfis." />
             <Permission allowed={Boolean(role)} label="Cadastrar beneficiarios e matriculas." />
           </CardContent>
         </Card>
@@ -513,16 +514,17 @@ function Consultas({
 }) {
   const listing = useListing<Consulta>("consultas", data);
   const options = useOptions(data, "consultas");
+  const [medicoId, setMedicoId] = useState("");
   const [editing, setEditing] = useState<Consulta | null>(null);
   const [beneficiarioId, setBeneficiarioId] = useState("");
   const [dataHora, setDataHora] = useState("");
-  const canCreate = session.user.role === "MEDICO";
+  const canCreate = session.user.role === "ADMIN" || session.user.role === "MEDICO";
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
       if (editing) await endpoints.updateConsulta(editing.id, { dataHora: toIsoFromLocalDateTime(dataHora) });
-      else await endpoints.createConsulta({ beneficiarioId, dataHora: toIsoFromLocalDateTime(dataHora) });
+      else await endpoints.createConsulta({ beneficiarioId, dataHora: toIsoFromLocalDateTime(dataHora), ...(session.user.role === "ADMIN" ? { medicoId } : {}) });
       setEditing(null);
       setBeneficiarioId("");
       setDataHora("");
@@ -532,9 +534,10 @@ function Consultas({
   return (
     <ResourceLayout
       title="Consultas"
-      description="Medicos criam consultas; somente o medico dono pode alterar ou remover."
+      description="Medicos gerenciam suas consultas; administradores podem gerenciar todas."
       aside={
         <FormCard title={editing ? "Reagendar consulta" : "Agendar consulta"} onSubmit={submit} busy={busy || !canCreate} submitLabel={editing ? "Salvar" : "Agendar"}>
+          {session.user.role === "ADMIN" && !editing ? <Field label="Medico responsavel"><Select value={medicoId} onChange={event => setMedicoId(event.target.value)} required><option value="">Selecione</option>{options.medicos.map(item => <option key={item.id} value={item.id}>{item.user.name}</option>)}</Select></Field> : null}
           {!canCreate ? <p className="text-sm text-muted-foreground">Apenas contas com perfil de medico podem criar consultas.</p> : null}
           <Field label="Beneficiario">
             <Select value={beneficiarioId} onChange={(event) => setBeneficiarioId(event.target.value)} required disabled={!canCreate || Boolean(editing)}>
@@ -580,7 +583,7 @@ function Consultas({
           </TableHeader>
           <TableBody>
             {listing.data.map((consulta) => {
-              const canEdit = session.user.role === "MEDICO" && consulta.medico.userId === session.user.id;
+              const canEdit = session.user.role === "ADMIN" || (session.user.role === "MEDICO" && consulta.medico.userId === session.user.id);
 
               return (
                 <TableRow key={consulta.id}>
@@ -624,12 +627,13 @@ function Aulas({
 }) {
   const listing = useListing<Aula>("aulas", data);
   const options = useOptions(data, "aulas");
+  const [instrutorId, setInstrutorId] = useState("");
   const [editing, setEditing] = useState<Aula | null>(null);
   const [titulo, setTitulo] = useState("");
   const [modalidade, setModalidade] = useState("");
   const [vagas, setVagas] = useState("10");
   const [selectedAulaId, setSelectedAulaId] = useState<string | null>(null);
-  const canCreate = session.user.role === "INSTRUTOR";
+  const canCreate = session.user.role === "ADMIN" || session.user.role === "INSTRUTOR";
   const selectedAula = listing.data.find((aula) => aula.id === selectedAulaId) ?? null;
   const enrolled = useListing<Matricula>("matriculas", selectedAulaId, Boolean(selectedAulaId));
   const selectedMatriculados = selectedAulaId && enrolled.filters.aulaId === selectedAulaId ? enrolled.data : [];
@@ -638,7 +642,7 @@ function Aulas({
     event.preventDefault();
     await runAction(async () => {
       if (editing) await endpoints.updateAula(editing.id, { titulo, modalidade, vagas: Number(vagas) });
-      else await endpoints.createAula({ titulo, modalidade, vagas: Number(vagas) });
+      else await endpoints.createAula({ titulo, modalidade, vagas: Number(vagas), ...(session.user.role === "ADMIN" ? { instrutorId } : {}) });
       setEditing(null);
       setTitulo("");
       setModalidade("");
@@ -652,6 +656,7 @@ function Aulas({
       description="Instrutores criam aulas; vagas disponiveis sao calculadas por vagas menos matriculas."
       aside={
         <FormCard title={editing ? "Editar aula" : "Nova aula"} onSubmit={submit} busy={busy || !canCreate} submitLabel={editing ? "Salvar" : "Criar aula"}>
+          {session.user.role === "ADMIN" && !editing ? <Field label="Instrutor responsavel"><Select value={instrutorId} onChange={event => setInstrutorId(event.target.value)} required><option value="">Selecione</option>{options.instrutores.map(item => <option key={item.id} value={item.id}>{item.user.name}</option>)}</Select></Field> : null}
           {!canCreate ? <p className="text-sm text-muted-foreground">Apenas contas com perfil de instrutor podem criar aulas.</p> : null}
           <Field label="Titulo">
             <Input value={titulo} onChange={(event) => setTitulo(event.target.value)} required disabled={!canCreate} />
@@ -696,7 +701,7 @@ function Aulas({
           <TableBody>
             {listing.data.map((aula) => {
               const disponiveis = getAulaDisponiveis(aula);
-              const canEdit = session.user.role === "INSTRUTOR" && aula.instrutor.userId === session.user.id;
+              const canEdit = session.user.role === "ADMIN" || (session.user.role === "INSTRUTOR" && aula.instrutor.userId === session.user.id);
 
 
               return (
@@ -936,7 +941,7 @@ function Admin({
   async function submitUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      const updated = editing ? await endpoints.updateUser(editing.id, { name, email }) : await endpoints.createUser({ name, email, password });
+      const updated = editing ? await endpoints.updateUser(editing.id, { name, email, ...(password ? { password } : {}) }) : await endpoints.createUser({ name, email, password });
       if (editing?.id === session.user.id) {
         const nextSession = { ...session, user: { ...session.user, name: updated.name, email: updated.email } };
         saveSession(nextSession); setSession(nextSession);
@@ -975,7 +980,7 @@ function Admin({
           <Card>
             <CardHeader>
               <CardTitle>Usuarios</CardTitle>
-              <CardDescription>Perfil e inferido pela existencia de medico ou instrutor no backend.</CardDescription>
+              <CardDescription>Administradores possuem acesso global; perfis profissionais mantem suas permissoes.</CardDescription>
             </CardHeader>
             <CardContent>
               {adminLoading ? (
@@ -999,12 +1004,12 @@ function Admin({
                         <TableCell>{user.email}</TableCell>
                         <TableCell>
                           <Badge variant={user.medico || user.instrutor ? "secondary" : "outline"}>
-                            {user.medico ? "Medico" : user.instrutor ? "Instrutor" : "Sem perfil"}
+                            {user.isAdmin ? "Administrador" : user.medico ? "Medico" : user.instrutor ? "Instrutor" : "Sem perfil"}
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <Button variant="outline" size="sm" disabled={busy} onClick={() => { setEditing(user); setName(user.name); setEmail(user.email); setPassword(""); }}>Editar</Button>
-                          <DeleteButton disabled={busy} onClick={() => runAction(async () => { await endpoints.deleteUser(user.id); const adminData = await endpoints.getAdminData(); setData(current => ({ ...current, ...adminData })); }, "Usuario removido.")}><Trash2 className="h-4 w-4" /></DeleteButton>
+                          <Button variant="outline" size="sm" disabled={busy || (user.isAdmin && session.user.role !== "ADMIN")} onClick={() => { setEditing(user); setName(user.name); setEmail(user.email); setPassword(""); }}>Editar</Button>
+                          <DeleteButton disabled={busy || user.id === session.user.id || (user.isAdmin && session.user.role !== "ADMIN")} onClick={() => runAction(async () => { await endpoints.deleteUser(user.id); const adminData = await endpoints.getAdminData(); setData(current => ({ ...current, ...adminData })); }, "Usuario removido.")}><Trash2 className="h-4 w-4" /></DeleteButton>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -1024,16 +1029,16 @@ function Admin({
               <Field label="Email">
                 <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
               </Field>
-              {!editing ? <Field label="Senha">
+              <Field label={editing ? "Nova senha (opcional)" : "Senha"}>
                 <Input
                   type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  required
+                  required={!editing}
                   minLength={8}
                   maxLength={72}
                 />
-              </Field> : null}
+              </Field>
               {editing ? <Button type="button" variant="outline" disabled={busy} onClick={() => { setEditing(null); setName(""); setEmail(""); setPassword(""); }}>Cancelar</Button> : null}
             </FormCard>
 
@@ -1084,7 +1089,7 @@ function MyAccount({
   const [email, setEmail] = useState(session.user.email);
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
-  const canEdit = session.user.role === "MEDICO" || session.user.role === "INSTRUTOR";
+  const canEdit = session.user.role === "ADMIN" || session.user.role === "MEDICO" || session.user.role === "INSTRUTOR";
 
   useEffect(() => {
     setName(session.user.name);

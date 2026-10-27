@@ -46,7 +46,7 @@ export function parsePage<T>(value: unknown, resource: string): Page<T> {
 }
 
 export function parseSession(value: unknown): Session {
-  if (!object(value) || !text(value.token) || !value.token || !named(value.user) || !object(value.user) || !text(value.user.email) || ![null, "MEDICO", "INSTRUTOR"].includes(value.user.role as string | null)) return invalid("auth/login");
+  if (!object(value) || !text(value.token) || !value.token || !named(value.user) || !object(value.user) || !text(value.user.email) || ![null, "ADMIN", "MEDICO", "INSTRUTOR"].includes(value.user.role as string | null)) return invalid("auth/login");
   return value as Session;
 }
 

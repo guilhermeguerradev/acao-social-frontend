@@ -71,7 +71,7 @@ try {
   await command("Fetch.enable", { patterns: [{ urlPattern: origin + "/api/*", requestStage: "Request" }] });
   await command("Page.navigate", { url: origin });
   await waitFor(() => evaluate("document.body.innerText.includes('Acesso ao sistema')"), "login inicial");
-  for (const scenario of process.env.BOUNDARY_ONLY ? [] : ["ok", "404", "500", "bad-page", "bad-row", "bad-options", "401"]) {
+  for (const scenario of process.env.BOUNDARY_ONLY ? [] : ["ok", "404", "500", "503", "bad-page", "bad-row", "bad-options", "401"]) {
     mode = scenario;
     await authenticatedPage();
     if (mode === "401") {
@@ -79,12 +79,12 @@ try {
       assert.equal(await evaluate("localStorage.getItem('acao-social:token')===null && localStorage.getItem('acao-social:user')===null"), true);
     } else {
       const invalid = ["bad-page", "bad-row"].includes(mode);
-      const expected = ["404", "500"].includes(mode) ? "Erro de teste " + mode : invalid ? "Resposta invalida" : "Proximas consultas";
+      const expected = ["404", "500", "503"].includes(mode) ? "Erro de teste " + mode : invalid ? "Resposta invalida" : "Proximas consultas";
       await waitFor(() => evaluate(`document.body.innerText.includes(${JSON.stringify(expected)})`), "dashboard " + mode);
       for (const tab of ["Demandas", "Consultas", "Aulas", "Solicitar apoio"]) {
         await click(tab);
         const form = tab === "Solicitar apoio";
-        const failure = ["404", "500"].includes(mode) ? "Erro de teste " + mode : (form ? mode === "bad-options" : invalid) ? "Resposta invalida" : null;
+        const failure = ["404", "500", "503"].includes(mode) ? "Erro de teste " + mode : (form ? mode === "bad-options" : invalid) ? "Resposta invalida" : null;
         if (failure) await waitFor(() => evaluate(`document.body.innerText.includes(${JSON.stringify(failure)})`), tab + " erro " + mode);
         else if (form) await waitFor(() => evaluate("Boolean(document.querySelector('#demand-phone'))"), "formulario de demandas");
         else await waitFor(() => evaluate("!document.body.innerText.includes('Carregando')"), tab + " carregada");
