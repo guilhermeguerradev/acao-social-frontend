@@ -38,10 +38,13 @@ async function fulfill(event) {
   apiRequests++;
   const url = new URL(event.request.url);
   assert.equal(url.origin, origin);
-  assert.equal(event.request.method, "GET");
+  const promotion = mode === "admin" && url.pathname.endsWith("/promote-admin");
+  assert.equal(event.request.method, promotion ? "POST" : "GET");
   const status = /^\d+$/.test(mode) ? Number(mode) : 200;
   let body;
-  if (status !== 200) body = { error: "Erro de teste " + status };
+  if (promotion) body = { id: "11111111-1111-4111-8111-111111111111", name: "Conta escolhida", email: "chosen@example.test", isAdmin: true, medico: null, instrutor: null };
+  else if (mode === "admin" && url.pathname === "/api/users") body = [{ id: "11111111-1111-4111-8111-111111111111", name: "Conta escolhida", email: "chosen@example.test", isAdmin: false, medico: null, instrutor: null }];
+  else if (status !== 200) body = { error: "Erro de teste " + status };
   else if (url.pathname === "/api/demandas/options") body = mode === "bad-options" ? {} : options;
   else if (["/api/medicos", "/api/instrutores", "/api/users"].includes(url.pathname)) body = [];
   else if (mode === "bad-page") body = [];
@@ -49,8 +52,8 @@ async function fulfill(event) {
   else body = { data: [], page: 1, limit: 20, total: 0, totalPages: 0 };
   await command("Fetch.fulfillRequest", { requestId: event.requestId, responseCode: status, responseHeaders: [{ name: "Content-Type", value: "application/json" }], body: Buffer.from(JSON.stringify(body)).toString("base64") });
 }
-async function authenticatedPage() {
-  await evaluate(`localStorage.setItem('acao-social:token','browser-test-token');localStorage.setItem('acao-social:user',JSON.stringify({id:'browser-user',name:'[TESTE] Conta',email:'test@example.test',role:'MEDICO'}))`);
+async function authenticatedPage(role = "MEDICO") {
+  await evaluate(`localStorage.setItem('acao-social:token','browser-test-token');localStorage.setItem('acao-social:user',JSON.stringify({id:'browser-user',name:'[TESTE] Conta',email:'test@example.test',role:${JSON.stringify(role)}}))`);
   await command("Page.reload");
 }
 try {
@@ -93,10 +96,25 @@ try {
     }
     console.log("Aprovado no navegador: " + scenario);
   }
+  if (!process.env.BOUNDARY_ONLY) {
+    mode = "ok";
+    await authenticatedPage();
+    await waitFor(() => evaluate("document.body.innerText.includes('Proximas consultas')"), "dashboard profissional");
+    await click("Minha conta");
+    assert.equal(await evaluate("!document.body.innerText.includes('Criar usuario sem perfil') && !document.body.innerText.includes('Promover a administrador')"), true);
+    mode = "admin";
+    await authenticatedPage("ADMIN");
+    await waitFor(() => evaluate("document.body.innerText.includes('Proximas consultas')"), "dashboard administrador");
+    await click("Usuarios");
+    await waitFor(() => evaluate("document.body.innerText.includes('Promover a administrador')"), "lista de usuarios do administrador");
+    await click("Promover a administrador");
+    assert.equal(await evaluate("document.querySelector('[role=dialog]')?.innerText.includes('chosen@example.test')"), true);
+    await click("Confirmar promocao");
+    await waitFor(() => evaluate("document.body.innerText.includes('Usuario promovido para administrador')"), "promocao confirmada pela API simulada");
+    assert.equal(await evaluate("!document.body.innerText.includes('Promover a administrador')"), true);
+    console.log("Aprovado no navegador: gestao exclusiva do administrador e promocao confirmada.");
+  }
   assert.deepEqual(exceptions, []);
-  await fs.mkdir(path.join(root, ".artifacts"), { recursive: true });
-  const capture = await command("Page.captureScreenshot", { format: "png" });
-  await fs.writeFile(path.join(root, ".artifacts/session-expired.png"), Buffer.from(capture.data, "base64"));
   await evaluate(`(async()=>{
     const reactModule=await import('/node_modules/.vite/deps/react.js');
     const domModule=await import('/node_modules/.vite/deps/react-dom_client.js');

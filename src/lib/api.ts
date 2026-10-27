@@ -151,6 +151,15 @@ export const endpoints = {
   updateBeneficiario: (id: string, payload: { name: string; telefone: string }) =>
     api<Beneficiario>(`/beneficiarios/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteUser: (id: string) => api<null>(`/users/${id}`, { method: "DELETE" }),
+  promoteAdmin: (id: string) => api<unknown>(`/users/${encodeURIComponent(id)}/promote-admin`, {
+    method: "POST", body: JSON.stringify({}),
+  }).then(value => {
+    const user = parseRecord<User>(value, "users");
+    if (user.isAdmin !== true) throw new Error("A API nao confirmou a promocao para administrador.");
+    return user;
+  }),
+  updateMyAccount: (payload: Partial<{ name: string; email: string; password: string }>) =>
+    api<User>("/users/me", { method: "PUT", body: JSON.stringify(payload) }),
   deleteBeneficiario: (id: string) => api<null>(`/beneficiarios/${id}`, { method: "DELETE" }),
   createConsulta: (payload: { beneficiarioId: string; dataHora: string; medicoId?: string }) =>
     api<Consulta>("/consultas", {

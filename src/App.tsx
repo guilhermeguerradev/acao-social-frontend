@@ -182,7 +182,7 @@ function App() {
     );
   }
 
-  const canManageUsers = session.user.role === "ADMIN" || session.user.role === "MEDICO" || session.user.role === "INSTRUTOR";
+  const canManageUsers = session.user.role === "ADMIN";
 
   return (
     <div className="min-h-screen">
@@ -217,7 +217,7 @@ function App() {
           <div role="status" className="rounded-lg border bg-card px-4 py-3 text-sm text-card-foreground shadow-sm">{message}</div>
         ) : null}
 
-        <Tabs items={tabs} value={activeTab} onChange={setActiveTab} />
+        <Tabs items={tabs.map(tab => tab.value === "admin" && !canManageUsers ? { ...tab, label: "Minha conta" } : tab)} value={activeTab} onChange={setActiveTab} />
 
         {activeTab === "dashboard" ? loading ? <p role="status">Carregando resumo...</p> : dashboardError ? <p role="alert" className="text-destructive">{dashboardError}</p> : <Dashboard data={data} role={session.user.role} /> : null}
         <div hidden={activeTab !== "apoio"}>
@@ -407,7 +407,7 @@ function Dashboard({ data, role }: { data: DashboardData; role: Role }) {
           <CardContent className="grid gap-3 text-sm">
             <Permission allowed={role === "ADMIN" || role === "MEDICO"} label="Gerenciar consultas conforme seu perfil." />
             <Permission allowed={role === "ADMIN" || role === "INSTRUTOR"} label="Gerenciar aulas conforme seu perfil." />
-            <Permission allowed={role === "ADMIN" || role === "MEDICO" || role === "INSTRUTOR"} label="Gerenciar usuarios e perfis." />
+            <Permission allowed={role === "ADMIN"} label="Gerenciar usuarios e perfis." />
             <Permission allowed={Boolean(role)} label="Cadastrar beneficiarios e matriculas." />
           </CardContent>
         </Card>
@@ -911,6 +911,7 @@ function Admin({
   const [profile, setProfile] = useState<"medico" | "instrutor">("medico");
   const [adminLoading, setAdminLoading] = useState(false);
   const loadedAdminRef = useRef(false);
+  const [promoting, setPromoting] = useState<User | null>(null);
 
   const loadAdminData = useCallback(async () => {
     if (!canManageUsers) return;
@@ -968,6 +969,17 @@ function Admin({
 
   return (
     <div className="grid gap-5">
+      {canManageUsers && promoting ? <Modal title="Promover para administrador" onClose={() => { if (!busy) setPromoting(null); }}>
+        <p className="mb-4">Conceder a {promoting.name} ({promoting.email}) acesso para gerenciar usuarios, perfis e todos os modulos? Os perfis profissionais existentes serao preservados.</p>
+        <div className="flex gap-3">
+          <Button type="button" disabled={busy} onClick={() => runAction(async () => {
+            const updated = await endpoints.promoteAdmin(promoting.id);
+            setData(current => ({ ...current, users: current.users.map(user => user.id === updated.id ? updated : user) }));
+            setPromoting(null);
+          }, "Usuario promovido para administrador. O usuario deve sair e entrar novamente para atualizar o perfil na interface.")}>Confirmar promocao</Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => setPromoting(null)}>Cancelar</Button>
+        </div>
+      </Modal> : null}
       <MyAccount
         session={session}
         setSession={setSession}
@@ -1009,6 +1021,7 @@ function Admin({
                         </TableCell>
                         <TableCell>
                           <Button variant="outline" size="sm" disabled={busy || (user.isAdmin && session.user.role !== "ADMIN")} onClick={() => { setEditing(user); setName(user.name); setEmail(user.email); setPassword(""); }}>Editar</Button>
+                          {!user.isAdmin ? <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setPromoting(user)}>Promover a administrador</Button> : null}
                           <DeleteButton disabled={busy || user.id === session.user.id || (user.isAdmin && session.user.role !== "ADMIN")} onClick={() => runAction(async () => { await endpoints.deleteUser(user.id); const adminData = await endpoints.getAdminData(); setData(current => ({ ...current, ...adminData })); }, "Usuario removido.")}><Trash2 className="h-4 w-4" /></DeleteButton>
                         </TableCell>
                       </TableRow>
@@ -1066,7 +1079,7 @@ function Admin({
         <Card>
           <CardHeader>
             <CardTitle>Administracao</CardTitle>
-            <CardDescription>Somente medicos e instrutores podem gerenciar usuarios e perfis.</CardDescription>
+            <CardDescription>Somente administradores podem gerenciar usuarios e perfis.</CardDescription>
           </CardHeader>
         </Card>
       )}
@@ -1089,7 +1102,6 @@ function MyAccount({
   const [email, setEmail] = useState(session.user.email);
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
-  const canEdit = session.user.role === "ADMIN" || session.user.role === "MEDICO" || session.user.role === "INSTRUTOR";
 
   useEffect(() => {
     setName(session.user.name);
@@ -1111,7 +1123,7 @@ function MyAccount({
         payload.password = password;
       }
 
-      const updatedUser = await endpoints.updateUser(session.user.id, payload);
+      const updatedUser = await endpoints.updateMyAccount(payload);
       const nextSession: Session = {
         ...session,
         user: {
@@ -1161,7 +1173,7 @@ function MyAccount({
             />
           </Field>
           <div className="flex items-end">
-            <Button className="w-full lg:w-auto" disabled={saving || !canEdit} type="submit">
+            <Button className="w-full lg:w-auto" disabled={saving} type="submit">
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Salvar
             </Button>

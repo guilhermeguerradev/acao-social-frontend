@@ -183,6 +183,32 @@ test('administrator sessions are accepted and a demand outage preserves their au
   assert.deepEqual(outage.events, []);
 });
 
+test('administrator promotion sends only the selected identity to the authenticated dedicated endpoint', async () => {
+  const { endpoints } = client(async (url, options) => {
+    assert.equal(url, '/api/users/selected-user/promote-admin');
+    assert.equal(options.method, 'POST');
+    assert.equal(options.headers.Authorization, 'Bearer token');
+    assert.deepEqual(JSON.parse(options.body), {});
+    return response({ id: 'selected-user', name: 'Pessoa', email: 'pessoa@example.test', isAdmin: true });
+  });
+  assert.equal((await endpoints.promoteAdmin('selected-user')).isAdmin, true);
+  const failed = client(async () => response({ error: 'Acesso negado' }, 403));
+  await assert.rejects(failed.endpoints.promoteAdmin('selected-user'));
+  const unconfirmed = client(async () => response({ id: 'selected-user', name: 'Pessoa', email: 'pessoa@example.test', isAdmin: false }));
+  await assert.rejects(unconfirmed.endpoints.promoteAdmin('selected-user'), /nao confirmou/);
+});
+
+test('own account updates use a separate endpoint without choosing another user or sending permissions', async () => {
+  const { endpoints } = client(async (url, options) => {
+    assert.equal(url, '/api/users/me');
+    assert.equal(options.method, 'PUT');
+    assert.equal(options.headers.Authorization, 'Bearer token');
+    assert.deepEqual(JSON.parse(options.body), { name: 'Novo nome' });
+    return response({ id: 'owner', name: 'Novo nome', email: 'pessoa@example.test' });
+  });
+  assert.equal((await endpoints.updateMyAccount({ name: 'Novo nome' })).id, 'owner');
+});
+
 test('malformed rows, demand options and non-JSON success responses are visible errors', async () => {
   const badRows = client(async () => response({ data: [{ id: 'bad', dataHora: 'not-a-date' }], page: 1, limit: 20, total: 1, totalPages: 1 }));
   await assert.rejects(badRows.endpoints.list('consultas'), /Resposta invalida/);
