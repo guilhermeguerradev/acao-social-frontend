@@ -224,6 +224,14 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  function changeMode(nextMode: "login" | "register") {
+    setMode(nextMode);
+    setName("");
+    setEmail("");
+    setPassword("");
+    setMessage(null);
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -232,7 +240,7 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
     try {
       if (mode === "register") {
         await endpoints.register(role, { name, email, password });
-        setMode("login");
+        changeMode("login");
         setMessage("Cadastro criado. Entre com o email e senha cadastrados.");
         return;
       }
@@ -258,10 +266,10 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
         </CardHeader>
         <CardContent>
           <div className="mb-4 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-            <Button type="button" variant={mode === "login" ? "secondary" : "ghost"} onClick={() => setMode("login")}>
+            <Button type="button" disabled={busy} variant={mode === "login" ? "secondary" : "ghost"} onClick={() => changeMode("login")}>
               Login
             </Button>
-            <Button type="button" variant={mode === "register" ? "secondary" : "ghost"} onClick={() => setMode("register")}>
+            <Button type="button" disabled={busy} variant={mode === "register" ? "secondary" : "ghost"} onClick={() => changeMode("register")}>
               Cadastro
             </Button>
           </div>
@@ -269,7 +277,7 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
             {mode === "register" ? (
               <>
                 <Field label="Nome">
-                  <Input value={name} onChange={(event) => setName(event.target.value)} required minLength={1} maxLength={120} />
+                  <Input name="name" autoComplete="name" placeholder="Seu nome completo" value={name} onChange={(event) => setName(event.target.value)} required minLength={1} maxLength={120} />
                 </Field>
                 <Field label="Perfil">
                   <Select value={role} onChange={(event) => setRole(event.target.value as "medico" | "instrutor")}>
@@ -280,11 +288,14 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
               </>
             ) : null}
             <Field label="Email">
-              <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+              <Input name="email" type="email" autoComplete="off" placeholder="seuemail@dominio.com" value={email} onChange={(event) => setEmail(event.target.value)} required />
             </Field>
             <Field label="Senha">
               <Input
                 type="password"
+                name="password"
+                autoComplete={mode === "register" ? "new-password" : "off"}
+                placeholder={mode === "register" ? "Crie uma senha com pelo menos 8 caracteres" : "Digite sua senha"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 required
