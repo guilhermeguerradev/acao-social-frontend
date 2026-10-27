@@ -25,6 +25,7 @@ import {
   Users,
 } from "lucide-react";
 import { useListing } from "./lib/listing";
+import { parseArray } from "./lib/response-validation";
 import { api, endpoints, clearStoredSession, getStoredSession, saveSession } from "./lib/api";
 import type { Aula, Beneficiario, Consulta, DashboardData, Instrutor, Matricula, Medico, Role, Session, User } from "./lib/types";
 import { formatDateTime, normalizeApiError, toIsoFromLocalDateTime } from "./lib/utils";
@@ -83,21 +84,24 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [demandRevision, setDemandRevision] = useState(0);
-  const loadingRef = useRef(false);
+  const loadingRef = useRef<string | null>(null);
   const loadedTokenRef = useRef<string | null>(null);
 
   const loadData = useCallback(async (force = false) => {
     if (!session) return;
-    if (loadingRef.current) return;
+    if (loadingRef.current === session.token) return;
     if (!force && loadedTokenRef.current === session.token) return;
 
-    loadingRef.current = true;
+    loadingRef.current = session.token;
     setLoading(true);
     setMessage(null);
+    setDashboardError(null);
 
     try {
       const dashboard = await endpoints.getDashboard();
+      if (getStoredSession()?.token !== session.token) return;
       setData((current) => ({
         ...current,
         ...dashboard,
@@ -112,16 +116,14 @@ function App() {
           : null,
       );
     } catch (error) {
+      if (getStoredSession()?.token !== session.token) return;
       const text = normalizeApiError(error);
-      setMessage(text);
-
-      if (text.toLowerCase().includes("token") || text.toLowerCase().includes("usuario nao encontrado")) {
-        clearStoredSession();
-        setSession(null);
-      }
+      setDashboardError(text);
     } finally {
-      loadingRef.current = false;
-      setLoading(false);
+      if (loadingRef.current === session.token) {
+        loadingRef.current = null;
+        setLoading(false);
+      }
     }
   }, [session]);
 
@@ -132,6 +134,8 @@ function App() {
   useEffect(() => {
     const expire = () => {
       setSession(null); setData(initialData); loadedTokenRef.current = null;
+      setDashboardError(null);
+      setActiveTab("dashboard");
       setMessage("Sessao expirada. Entre novamente.");
     };
     window.addEventListener("session-expired", expire);
@@ -142,6 +146,7 @@ function App() {
     clearStoredSession();
     setSession(null);
     setData(initialData);
+    setDashboardError(null);
     loadedTokenRef.current = null;
     setActiveTab("dashboard");
   }
@@ -165,7 +170,10 @@ function App() {
   if (!session) {
     return (
       <AuthScreen
+        notice={message}
         onSession={(nextSession) => {
+          setMessage(null);
+          setActiveTab("dashboard");
           saveSession(nextSession);
           setSession(nextSession);
         }}
@@ -205,12 +213,12 @@ function App() {
 
       <main className="mx-auto grid max-w-7xl gap-5 px-4 py-6 sm:px-6">
         {message ? (
-          <div className="rounded-lg border bg-card px-4 py-3 text-sm text-card-foreground shadow-sm">{message}</div>
+          <div role="status" className="rounded-lg border bg-card px-4 py-3 text-sm text-card-foreground shadow-sm">{message}</div>
         ) : null}
 
         <Tabs items={tabs} value={activeTab} onChange={setActiveTab} />
 
-        {activeTab === "dashboard" ? <Dashboard data={data} role={session.user.role} /> : null}
+        {activeTab === "dashboard" ? loading ? <p role="status">Carregando resumo...</p> : dashboardError ? <p role="alert" className="text-destructive">{dashboardError}</p> : <Dashboard data={data} role={session.user.role} /> : null}
         <div hidden={activeTab !== "apoio"}>
           <DemandFlow
             key={session.user.id}
@@ -245,7 +253,7 @@ function App() {
   );
 }
 
-function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
+function AuthScreen({ onSession, notice }: { onSession: (session: Session) => void; notice?: string | null }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [role, setRole] = useState<"medico" | "instrutor">("medico");
   const [name, setName] = useState("");
@@ -333,7 +341,7 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
                 maxLength={72}
               />
             </Field>
-            {message ? <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{message}</p> : null}
+            {message || notice ? <p role="alert" className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{message ?? notice}</p> : null}
             <Button disabled={busy} type="submit">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               {mode === "login" ? "Entrar" : "Criar conta"}
@@ -1295,8 +1303,8 @@ function useOptions(revision: unknown, resource: "consultas" | "aulas" | "matric
     Promise.all([
       resource !== "aulas" ? endpoints.all<Beneficiario>("beneficiarios", {}, controller.signal) : Promise.resolve([]),
       resource === "matriculas" ? endpoints.all<Aula>("aulas", {}, controller.signal) : Promise.resolve([]),
-      resource === "consultas" ? api<Medico[]>("/medicos", { signal: controller.signal }) : Promise.resolve([]),
-      resource === "aulas" ? api<Instrutor[]>("/instrutores", { signal: controller.signal }) : Promise.resolve([]),
+      resource === "consultas" ? api<unknown>("/medicos", { signal: controller.signal }).then(value => parseArray<Medico>(value, "medicos")) : Promise.resolve([]),
+      resource === "aulas" ? api<unknown>("/instrutores", { signal: controller.signal }).then(value => parseArray<Instrutor>(value, "instrutores")) : Promise.resolve([]),
     ]).then(([beneficiarios, aulas, medicos, instrutores]) => {
       if (!controller.signal.aborted) setOptions({ beneficiarios, aulas, medicos, instrutores, error: "" });
     }).catch(error => { if (!controller.signal.aborted) setOptions(current => ({ ...current, error: normalizeApiError(error) })); });

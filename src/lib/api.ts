@@ -1,9 +1,7 @@
 import type {
   Aula,
   Demand,
-  DemandOptions,
   CreateDemandPayload,
-  Page,
   ListParams,
   AdminData,
   Beneficiario,
@@ -16,6 +14,7 @@ import type {
   User,
 } from "./types";
 import { normalizeApiError } from "./utils";
+import { parseArray, parseDemandOptions, parsePage, parseRecord, parseSession } from "./response-validation";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "/api";
 const TOKEN_KEY = "acao-social:token";
@@ -25,10 +24,13 @@ export function getStoredSession(): Session | null {
   const token = localStorage.getItem(TOKEN_KEY);
   const user = localStorage.getItem(USER_KEY);
 
-  if (!token || !user) return null;
+  if (!token || !user) {
+    if (token || user) clearStoredSession();
+    return null;
+  }
 
   try {
-    return { token, user: JSON.parse(user) };
+    return parseSession({ token, user: JSON.parse(user) });
   } catch {
     clearStoredSession();
     return null;
@@ -58,7 +60,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     },
   });
 
-  if (response.status === 401 && token) {
+  if (response.status === 401 && token && token === localStorage.getItem(TOKEN_KEY)) {
     clearStoredSession();
     window.dispatchEvent(new Event("session-expired"));
   }
@@ -69,6 +71,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (!response.ok) {
     throw data ?? { error: "Erro inesperado na API" };
   }
+
+  if (data === null) throw new Error("Resposta invalida da API. O servidor nao retornou JSON.");
 
   return data as T;
 }
@@ -82,16 +86,16 @@ async function collect<T>(label: string, request: Promise<T[]>): Promise<{ data:
 }
 
 export const endpoints = {
-  getDemandOptions: (signal?: AbortSignal) => api<DemandOptions>("/demandas/options", { signal }),
+  getDemandOptions: (signal?: AbortSignal) => api<unknown>("/demandas/options", { signal }).then(parseDemandOptions),
   createDemand: (payload: CreateDemandPayload) =>
-    api<Demand>("/demandas", { method: "POST", body: JSON.stringify(payload) }),
+    api<unknown>("/demandas", { method: "POST", body: JSON.stringify(payload) }).then(value => parseRecord<Demand>(value, "demandas")),
   getDemand: (id: string, signal?: AbortSignal) =>
-    api<Demand>(`/demandas/${encodeURIComponent(id)}`, { signal }),
+    api<unknown>(`/demandas/${encodeURIComponent(id)}`, { signal }).then(value => parseRecord<Demand>(value, "demandas")),
   login: (email: string, password: string) =>
-    api<Session>("/auth/login", {
+    api<unknown>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
-    }),
+    }).then(parseSession),
   register: (role: "medico" | "instrutor", payload: { name: string; email: string; password: string }) =>
     api<User>(`/auth/register/${role}`, {
       method: "POST",
@@ -100,7 +104,7 @@ export const endpoints = {
   list: <T>(resource: string, params: ListParams = {}, signal?: AbortSignal) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
-    return api<Page<T>>(`/${resource}?${query}`, { signal });
+    return api<unknown>(`/${resource}?${query}`, { signal }).then(value => parsePage<T>(value, resource));
   },
   all: async <T>(resource: string, params: ListParams = {}, signal?: AbortSignal): Promise<T[]> => {
     const first = await endpoints.list<T>(resource, { ...params, page: 1, limit: 100 }, signal);
@@ -127,9 +131,9 @@ export const endpoints = {
   },
   getAdminData: async (): Promise<AdminData> => {
     const [users, medicos, instrutores] = await Promise.all([
-      collect("Usuarios", api<User[]>("/users")),
-      collect("Medicos", api<Medico[]>("/medicos")),
-      collect("Instrutores", api<Instrutor[]>("/instrutores")),
+      collect("Usuarios", api<unknown>("/users").then(value => parseArray<User>(value, "users"))),
+      collect("Medicos", api<unknown>("/medicos").then(value => parseArray<Medico>(value, "medicos"))),
+      collect("Instrutores", api<unknown>("/instrutores").then(value => parseArray<Instrutor>(value, "instrutores"))),
     ]);
 
     return {
@@ -160,7 +164,7 @@ export const endpoints = {
     }),
   deleteConsulta: (id: string) => api<null>(`/consultas/${id}`, { method: "DELETE" }),
   getAula: (id: string, signal?: AbortSignal) =>
-    api<Aula>(`/aulas/${encodeURIComponent(id)}`, { signal }),
+    api<unknown>(`/aulas/${encodeURIComponent(id)}`, { signal }).then(value => parseRecord<Aula>(value, "aulas")),
   createAula: (payload: { titulo: string; modalidade: string; vagas: number }) =>
     api<Aula>("/aulas", {
       method: "POST",
