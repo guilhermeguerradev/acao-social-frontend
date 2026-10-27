@@ -1,5 +1,10 @@
 import type {
   Aula,
+  Demand,
+  DemandOptions,
+  CreateDemandPayload,
+  Page,
+  ListParams,
   AdminData,
   Beneficiario,
   Consulta,
@@ -53,6 +58,10 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     },
   });
 
+  if (response.status === 401 && token) {
+    clearStoredSession();
+    window.dispatchEvent(new Event("session-expired"));
+  }
   if (response.status === 204) return null as T;
 
   const data = await response.json().catch(() => null);
@@ -73,6 +82,11 @@ async function collect<T>(label: string, request: Promise<T[]>): Promise<{ data:
 }
 
 export const endpoints = {
+  getDemandOptions: (signal?: AbortSignal) => api<DemandOptions>("/demandas/options", { signal }),
+  createDemand: (payload: CreateDemandPayload) =>
+    api<Demand>("/demandas", { method: "POST", body: JSON.stringify(payload) }),
+  getDemand: (id: string, signal?: AbortSignal) =>
+    api<Demand>(`/demandas/${encodeURIComponent(id)}`, { signal }),
   login: (email: string, password: string) =>
     api<Session>("/auth/login", {
       method: "POST",
@@ -83,25 +97,32 @@ export const endpoints = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  list: <T>(resource: string, params: ListParams = {}, signal?: AbortSignal) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
+    return api<Page<T>>(`/${resource}?${query}`, { signal });
+  },
+  all: async <T>(resource: string, params: ListParams = {}, signal?: AbortSignal): Promise<T[]> => {
+    const first = await endpoints.list<T>(resource, { ...params, page: 1, limit: 100 }, signal);
+    const rows = [...first.data];
+    for (let page = 2; page <= first.totalPages; page++) {
+      rows.push(...(await endpoints.list<T>(resource, { ...params, page, limit: 100 }, signal)).data);
+    }
+    return rows;
+  },
   getDashboard: async (): Promise<DashboardData> => {
-    const [beneficiarios, consultas, aulas, matriculas] = await Promise.all([
-      collect("Beneficiarios", api<Beneficiario[]>("/beneficiarios")),
-      collect("Consultas", api<Consulta[]>("/consultas")),
-      collect("Aulas", api<Aula[]>("/aulas")),
-      collect("Matriculas", api<Matricula[]>("/matriculas")),
+    const [beneficiarios, consultas, aulas, matriculas, available] = await Promise.all([
+      endpoints.list<Beneficiario>("beneficiarios", { limit: 1 }),
+      endpoints.list<Consulta>("consultas", { limit: 5, startDate: new Date().toISOString() }),
+      endpoints.list<Aula>("aulas", { limit: 1 }),
+      endpoints.list<Matricula>("matriculas", { limit: 1 }),
+      endpoints.list<Aula>("aulas", { limit: 1, available: "true" }),
     ]);
-
+    const allConsultas = await endpoints.list<Consulta>("consultas", { limit: 1 });
     return {
-      beneficiarios: beneficiarios.data,
-      consultas: consultas.data,
-      aulas: aulas.data,
-      matriculas: matriculas.data,
-      users: [],
-      medicos: [],
-      instrutores: [],
-      errors: [beneficiarios, consultas, aulas, matriculas]
-        .map((item) => item.error)
-        .filter((item): item is string => Boolean(item)),
+      beneficiarios: beneficiarios.data, consultas: consultas.data, aulas: aulas.data, matriculas: matriculas.data,
+      users: [], medicos: [], instrutores: [], errors: [],
+      totals: { beneficiarios: beneficiarios.total, consultas: allConsultas.total, aulas: aulas.total, matriculas: matriculas.total, availableAulas: available.total },
     };
   },
   getAdminData: async (): Promise<AdminData> => {
@@ -123,6 +144,9 @@ export const endpoints = {
       method: "POST",
       body: JSON.stringify({ ...payload, telefone: payload.telefone || undefined }),
     }),
+  updateBeneficiario: (id: string, payload: { name: string; telefone: string }) =>
+    api<Beneficiario>(`/beneficiarios/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteUser: (id: string) => api<null>(`/users/${id}`, { method: "DELETE" }),
   deleteBeneficiario: (id: string) => api<null>(`/beneficiarios/${id}`, { method: "DELETE" }),
   createConsulta: (payload: { beneficiarioId: string; dataHora: string }) =>
     api<Consulta>("/consultas", {
@@ -135,6 +159,8 @@ export const endpoints = {
       body: JSON.stringify(payload),
     }),
   deleteConsulta: (id: string) => api<null>(`/consultas/${id}`, { method: "DELETE" }),
+  getAula: (id: string, signal?: AbortSignal) =>
+    api<Aula>(`/aulas/${encodeURIComponent(id)}`, { signal }),
   createAula: (payload: { titulo: string; modalidade: string; vagas: number }) =>
     api<Aula>("/aulas", {
       method: "POST",

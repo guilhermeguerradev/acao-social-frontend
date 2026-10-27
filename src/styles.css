@@ -69,3 +69,22 @@ select {
 #root {
   min-height: 100vh;
 }
+
+/* Layouts das referências, mantendo os tokens e as telas administrativas. */
+.reference-screen { font-size: 0.875rem; line-height: 1.6; }
+.reference-screen h3 { line-height: 1.4; }
+.reference-screen .flow-section + .flow-section {
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 1.5rem;
+  margin-top: 1.5rem;
+}
+.reference-screen .flow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 1.25rem;
+  margin-top: 1.5rem;
+}

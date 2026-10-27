@@ -3,7 +3,7 @@
 Versao da API: `1.0.0`
 Base URL local: use `VITE_API_URL` no front-end e `VITE_API_HOST`/`VITE_API_PORT` para proxy local.
 Stack: Express, TypeScript, Prisma, PostgreSQL, JWT, bcrypt, Zod
-Atualizado em: `06/05/2026`
+Atualizado em: `26/10/2026`
 
 Esta documentacao foi escrita para o front-end saber:
 
@@ -32,7 +32,7 @@ Esta documentacao foi escrita para o front-end saber:
 - Todos os IDs sao UUIDs em formato string.
 - Datas sao retornadas em ISO string, por exemplo `"2026-05-06T13:00:00.000Z"`.
 - O backend aceita JSON. Sempre envie `Content-Type: application/json` em requests com body.
-- Listagens retornam no maximo 100 registros. Hoje nao existem query params de pagina, busca ou filtro implementados.
+- Beneficiarios, consultas, aulas e matriculas usam o envelope paginado descrito abaixo; usuarios, medicos e instrutores preservam o retorno em array.
 - Senhas nunca sao retornadas pela API.
 - O papel do usuario vem do banco:
   - se o usuario tem registro em `Medico`, o papel e `MEDICO`;
@@ -40,6 +40,67 @@ Esta documentacao foi escrita para o front-end saber:
   - se nao tem nenhum dos dois, o papel e `null`.
 - A autenticacao usa JWT. Depois do login, salve o `token` no front e envie em todas as rotas protegidas.
 - O backend recalcula o papel do usuario em cada request autenticado. Nao confie apenas no papel salvo no front.
+
+## Demandas — contrato completo aprovado
+
+Todas as rotas exigem JWT. A identidade e o perfil são obtidos pelo middleware de autenticação, nunca pelo corpo da requisição.
+
+| Endpoint | Comportamento |
+| --- | --- |
+| `POST /demandas` | Recebe os campos obrigatórios descritos abaixo. Cria demanda ligada ao usuário autenticado com situação `RECEIVED` (Recebida). Retorna 201. |
+| `GET /demandas/options` | Fonte dos códigos/rótulos de categorias, canais de retorno e texto/versão do consentimento usados pelo frontend. |
+| `GET /demandas?page=1&limit=20` | Envelope `{ data, page, limit, total, totalPages }`. Usuários comuns recebem somente suas demandas; médicos e instrutores recebem todas. Limite máximo 100. |
+| `GET /demandas/:id` | Retorna a demanda própria ou, para médicos/instrutores, qualquer demanda. ID inválido: 400; ausente ou fora do acesso permitido: 404. |
+
+A resposta contém `id`, `description`, `status`, `requesterId`, `createdAt`, `requester: { id, name }`, os campos de contato/pedido e a data, versão e texto do consentimento. Não contém senha, email ou chave técnica de envio. Não há vínculo com beneficiários. A listagem aceita também `search` (até 120 caracteres) por ID, descrição ou nome do solicitante, sem ampliar o escopo de acesso.
+
+Campos do POST: `description` (trim, 1–2.000), `phone` (telefone brasileiro com DDD, normalizado para 10/11 dígitos; aceita formatação e +55), `neighborhood` (trim, 1–120), `returnPreference` (`WHATSAPP` ou `PHONE_CALL`), `category` (`FOOD`, `CLOTHING`, `HYGIENE`, `HEALTH`, `EDUCATION`, `SOCIAL_ASSISTANCE` ou `OTHER`), `urgent` (boolean obrigatório), `contactConsent` (literal true) e `requestKey` (UUID). Em `OTHER`, `otherDescription` é obrigatório (trim, 1–200); em outras categorias, não é persistido.
+
+O nome vem da conta autenticada e não pode ser alterado por este formulário. O servidor registra `contactConsentAt`, `contactConsentVersion=contact-v1` e `contactConsentText`: “Autorizo o uso dos dados informados para análise e contato sobre esta solicitação.” Campos de identidade, situação ou consentimento técnico fornecidos pelo cliente são rejeitados. A urgência não modifica a situação nem cria prioridade automática. Os selects começam sem escolha; o consentimento começa desmarcado.
+
+Demandas anteriores continuam legíveis com campos novos nulos e sem consentimento retroativo. Anexos estão indisponíveis: não há seletor ativo, upload, armazenamento ou tabela de arquivos.
+
+Reenvios do mesmo usuário, com a mesma chave e todos os campos normalizados iguais, retornam o registro anterior com 200, preservando o consentimento original. A constraint única também protege reenvios concorrentes. Reutilizar a chave com qualquer dado diferente retorna 409, sem alterar a demanda existente. A chave é mantida no formulário entre revisão e tentativas; uma nova solicitação recebe nova chave.
+
+A interface confirma o recebimento somente após sucesso da API. Recebimento não representa análise ou aprovação. Não existem endpoints de atualização de situação, aprovação, rejeição ou exclusão de demanda nesta entrega.
+
+Migrations aditivas: `20261026000000_add_demands` e `20261026010000_extend_demand_fields`. Aplicação em outro ambiente requer executar as migrations pelo processo habitual; não foi feito deploy.
+
+Testes padrão: `npm test`. Teste opt-in de persistência: `npm run test:integration:demands`, com `DEMAND_TEST_DATABASE_URL` apontando para PostgreSQL **local**. Esse teste usa um schema temporário exclusivo, aplica as migrations nele e o remove ao terminar; não usa tabelas da aplicação.
+
+## Listagens paginadas (26/10/2026)
+
+GET /beneficiarios, /consultas, /aulas e /matriculas retornam um objeto:
+
+```json
+{ "data": [], "page": 1, "limit": 20, "total": 0, "totalPages": 0 }
+```
+
+Use page (inteiro >= 1, padrao 1) e limit (1 a 100, padrao 20).
+total considera todos os filtros; totalPages vale 0 para resultados vazios.
+Os itens em data preservam seus campos e relacionamentos anteriores.
+Ordenacao: consultas por dataHora crescente, demais por createdAt decrescente;
+id crescente desempata em todas as quatro listagens.
+
+Filtros opcionais combinaveis com page e limit:
+
+| Rota | Parametros |
+| --- | --- |
+| /beneficiarios | search: nome parcial sem distinguir maiusculas |
+| /consultas | medicoId, beneficiarioId (UUID); startDate, endDate (ISO com fuso, limites inclusivos) |
+| /aulas | instrutorId (UUID), modalidade (parcial sem distinguir maiusculas), available (true ou false) |
+| /matriculas | aulaId (UUID; utilizado no modal de matriculados) |
+
+Parametros invalidos retornam 400. Todas essas rotas exigem JWT.
+Usuarios, medicos e instrutores continuam com o contrato anterior em array.
+Os exemplos de itens individuais nas secoes de listagem abaixo correspondem ao campo data.
+O frontend foi atualizado junto com esta mudanca de contrato; consumidores externos devem adotar o envelope.
+
+PUT /beneficiarios/{id} exige JWT e aceita somente name e telefone, ambos opcionais,
+com pelo menos um campo informado. name deve ter 1 a 120 caracteres apos trim;
+telefone aceita ate 20 caracteres e string vazia para limpar. Campos desconhecidos,
+inclusive id, retornam 400. Beneficiario ausente retorna 404; a resposta segue o objeto
+publico existente. Exclusoes bloqueadas por dependencias retornam 409.
 
 ## Headers
 
@@ -598,7 +659,7 @@ Resposta `201`: beneficiario criado.
 
 ### GET `/beneficiarios`
 
-Lista ate 100 beneficiarios recentes.
+Lista beneficiarios com paginacao (campo data).
 
 Autenticacao: obrigatoria.
 
@@ -637,7 +698,7 @@ Resposta `204`.
 
 Regra: se o beneficiario tiver consultas ou matriculas vinculadas, o banco pode impedir a exclusao.
 
-Importante: existe schema de update no codigo, mas nao existe rota `PUT /beneficiarios/{id}` registrada hoje.
+Edicao disponivel: `PUT /beneficiarios/{id}`, conforme contrato acima.
 
 ## Aulas
 
@@ -706,7 +767,7 @@ Resposta `201`: aula criada.
 
 ### GET `/aulas`
 
-Lista ate 100 aulas recentes.
+Lista aulas com paginacao (campo data).
 
 Autenticacao: obrigatoria.
 
@@ -846,7 +907,7 @@ Erros:
 
 ### GET `/consultas`
 
-Lista ate 100 consultas ordenadas por `dataHora` crescente.
+Lista consultas paginadas (campo data), ordenadas por `dataHora` crescente.
 
 Autenticacao: obrigatoria.
 
@@ -955,7 +1016,7 @@ Erros:
 
 ### GET `/matriculas`
 
-Lista ate 100 matriculas recentes.
+Lista matriculas com paginacao (campo data).
 
 Autenticacao: obrigatoria.
 
@@ -1474,5 +1535,5 @@ Referencias oficiais:
 - Nao enviar `instrutorId` ao criar aula no fluxo normal.
 - Calcular vagas disponiveis com `aula.vagas - aula._count.matriculas`.
 - Desabilitar matricula quando a aula estiver cheia, mas ainda tratar erro vindo do backend.
-- Nao depender de query params de busca/paginacao, pois ainda nao existem.
+- Utilizar busca, filtros e paginacao no servidor conforme contrato acima.
 - Nao conectar o front direto no banco.

@@ -1,6 +1,7 @@
 import {
   type Dispatch,
-  FormEvent,
+  type FormEvent,
+  type ComponentProps,
   type ReactNode,
   type SetStateAction,
   useCallback,
@@ -23,8 +24,9 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { endpoints, clearStoredSession, getStoredSession, saveSession } from "./lib/api";
-import type { Aula, DashboardData, Matricula, Role, Session } from "./lib/types";
+import { useListing } from "./lib/listing";
+import { api, endpoints, clearStoredSession, getStoredSession, saveSession } from "./lib/api";
+import type { Aula, Beneficiario, Consulta, DashboardData, Instrutor, Matricula, Medico, Role, Session, User } from "./lib/types";
 import { formatDateTime, normalizeApiError, toIsoFromLocalDateTime } from "./lib/utils";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -35,8 +37,11 @@ import { Label } from "./components/ui/label";
 import { Select } from "./components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { Tabs } from "./components/ui/tabs";
+import { CourseCatalog } from "./components/courses/CourseCatalog";
+import { DemandFlow } from "./components/demands/DemandFlow";
+import { DemandManagement } from "./components/demands/DemandManagement";
 
-type ActiveTab = "dashboard" | "beneficiarios" | "consultas" | "aulas" | "matriculas" | "admin";
+type ActiveTab = "dashboard" | "apoio" | "demandas" | "cursos" | "beneficiarios" | "consultas" | "aulas" | "matriculas" | "admin";
 
 const initialData: DashboardData = {
   beneficiarios: [],
@@ -51,6 +56,9 @@ const initialData: DashboardData = {
 
 const tabs = [
   { value: "dashboard", label: "Resumo" },
+  { value: "apoio", label: "Solicitar apoio" },
+  { value: "demandas", label: "Demandas" },
+  { value: "cursos", label: "Cursos" },
   { value: "beneficiarios", label: "Beneficiarios" },
   { value: "consultas", label: "Consultas" },
   { value: "aulas", label: "Aulas" },
@@ -75,6 +83,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [demandRevision, setDemandRevision] = useState(0);
   const loadingRef = useRef(false);
   const loadedTokenRef = useRef<string | null>(null);
 
@@ -120,6 +129,15 @@ function App() {
     void loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const expire = () => {
+      setSession(null); setData(initialData); loadedTokenRef.current = null;
+      setMessage("Sessao expirada. Entre novamente.");
+    };
+    window.addEventListener("session-expired", expire);
+    return () => window.removeEventListener("session-expired", expire);
+  }, []);
+
   function handleLogout() {
     clearStoredSession();
     setSession(null);
@@ -134,8 +152,9 @@ function App() {
 
     try {
       await action();
-      setMessage(success);
+      setData(current => ({ ...current }));
       await loadData(true);
+      setMessage(success);
     } catch (error) {
       setMessage(normalizeApiError(error));
     } finally {
@@ -192,6 +211,17 @@ function App() {
         <Tabs items={tabs} value={activeTab} onChange={setActiveTab} />
 
         {activeTab === "dashboard" ? <Dashboard data={data} role={session.user.role} /> : null}
+        <div hidden={activeTab !== "apoio"}>
+          <DemandFlow
+            key={session.user.id}
+            user={session.user}
+            onBack={() => setActiveTab("dashboard")}
+            onViewDemands={() => setActiveTab("demandas")}
+            onCreated={() => setDemandRevision(current => current + 1)}
+          />
+        </div>
+        {activeTab === "demandas" ? <DemandManagement role={session.user.role} revision={demandRevision} onRegister={() => setActiveTab("apoio")} /> : null}
+        {activeTab === "cursos" ? <CourseCatalog revision={data} /> : null}
         {activeTab === "beneficiarios" ? <Beneficiarios data={data} busy={busy} runAction={runAction} /> : null}
         {activeTab === "consultas" ? (
           <Consultas data={data} session={session} busy={busy} runAction={runAction} />
@@ -317,15 +347,15 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
 
 function Dashboard({ data, role }: { data: DashboardData; role: Role }) {
   const proximasConsultas = data.consultas.slice(0, 5);
-  const aulasComVaga = data.aulas.filter((aula) => getAulaDisponiveis(aula) > 0).length;
+  const aulasComVaga = data.totals?.availableAulas ?? 0;
 
   return (
     <div className="grid gap-5">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Metric icon={Users} label="Beneficiarios" value={data.beneficiarios.length} />
-        <Metric icon={CalendarClock} label="Consultas" value={data.consultas.length} />
+        <Metric icon={Users} label="Beneficiarios" value={data.totals?.beneficiarios ?? 0} />
+        <Metric icon={CalendarClock} label="Consultas" value={data.totals?.consultas ?? 0} />
         <Metric icon={BookOpen} label="Aulas com vaga" value={aulasComVaga} />
-        <Metric icon={GraduationCap} label="Matriculas" value={data.matriculas.length} />
+        <Metric icon={GraduationCap} label="Matriculas" value={data.totals?.matriculas ?? 0} />
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
@@ -386,34 +416,42 @@ function Beneficiarios({
   busy: boolean;
   runAction: (action: () => Promise<unknown>, success: string) => Promise<void>;
 }) {
+  const listing = useListing<Beneficiario>("beneficiarios", data);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const cancel = () => { setEditingId(null); setName(""); setTelefone(""); };
   const [name, setName] = useState("");
   const [telefone, setTelefone] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      await endpoints.createBeneficiario({ name, telefone });
+      if (editingId) await endpoints.updateBeneficiario(editingId, { name, telefone });
+      else await endpoints.createBeneficiario({ name, telefone });
+      setEditingId(null);
       setName("");
       setTelefone("");
-    }, "Beneficiario cadastrado.");
+    }, "Beneficiario salvo.");
   }
 
   return (
     <ResourceLayout
       title="Beneficiarios"
-      description="Cadastro da pessoa atendida. A API ainda nao possui rota de edicao para este recurso."
+      description="Cadastro e edicao da pessoa atendida."
       aside={
-        <FormCard title="Novo beneficiario" onSubmit={submit} busy={busy} submitLabel="Cadastrar">
+        <FormCard title={editingId ? "Editar beneficiario" : "Novo beneficiario"} onSubmit={submit} busy={busy} submitLabel={editingId ? "Salvar" : "Cadastrar"}>
           <Field label="Nome">
             <Input value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} />
           </Field>
           <Field label="Telefone">
             <Input value={telefone} onChange={(event) => setTelefone(event.target.value)} maxLength={20} />
           </Field>
+          {editingId ? <Button type="button" variant="outline" disabled={busy} onClick={cancel}>Cancelar</Button> : null}
         </FormCard>
       }
     >
-      {data.beneficiarios.length ? (
+      <div className="mb-4 flex gap-2"><Input aria-label="Buscar beneficiario" placeholder="Buscar beneficiario" value={String(listing.filters.search ?? "")} onChange={event => listing.filter("search", event.target.value)} maxLength={120} /><Button variant="outline" onClick={listing.clear}>Limpar</Button></div>
+      <ListStatus listing={listing} />
+      {listing.data.length ? (
         <Table>
           <TableHeader>
             <TableRow>
@@ -424,13 +462,14 @@ function Beneficiarios({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.beneficiarios.map((beneficiario) => (
+            {listing.data.map((beneficiario) => (
               <TableRow key={beneficiario.id}>
                 <TableCell className="font-medium">{beneficiario.name}</TableCell>
                 <TableCell>{beneficiario.telefone || "-"}</TableCell>
                 <TableCell>{formatDateTime(beneficiario.createdAt)}</TableCell>
                 <TableCell>
-                  <Button
+                  <Button variant="outline" size="sm" disabled={busy} onClick={() => { setEditingId(beneficiario.id); setName(beneficiario.name); setTelefone(beneficiario.telefone ?? ""); }}>Editar</Button>
+                  <DeleteButton
                     variant="ghost"
                     size="icon"
                     aria-label="Remover beneficiario"
@@ -440,7 +479,7 @@ function Beneficiarios({
                     }
                   >
                     <Trash2 className="h-4 w-4" />
-                  </Button>
+                  </DeleteButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -464,6 +503,9 @@ function Consultas({
   busy: boolean;
   runAction: (action: () => Promise<unknown>, success: string) => Promise<void>;
 }) {
+  const listing = useListing<Consulta>("consultas", data);
+  const options = useOptions(data, "consultas");
+  const [editing, setEditing] = useState<Consulta | null>(null);
   const [beneficiarioId, setBeneficiarioId] = useState("");
   const [dataHora, setDataHora] = useState("");
   const canCreate = session.user.role === "MEDICO";
@@ -471,10 +513,12 @@ function Consultas({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      await endpoints.createConsulta({ beneficiarioId, dataHora: toIsoFromLocalDateTime(dataHora) });
+      if (editing) await endpoints.updateConsulta(editing.id, { dataHora: toIsoFromLocalDateTime(dataHora) });
+      else await endpoints.createConsulta({ beneficiarioId, dataHora: toIsoFromLocalDateTime(dataHora) });
+      setEditing(null);
       setBeneficiarioId("");
       setDataHora("");
-    }, "Consulta agendada.");
+    }, "Consulta salva.");
   }
 
   return (
@@ -482,12 +526,12 @@ function Consultas({
       title="Consultas"
       description="Medicos criam consultas; somente o medico dono pode alterar ou remover."
       aside={
-        <FormCard title="Agendar consulta" onSubmit={submit} busy={busy || !canCreate} submitLabel="Agendar">
+        <FormCard title={editing ? "Reagendar consulta" : "Agendar consulta"} onSubmit={submit} busy={busy || !canCreate} submitLabel={editing ? "Salvar" : "Agendar"}>
           {!canCreate ? <p className="text-sm text-muted-foreground">Apenas contas com perfil de medico podem criar consultas.</p> : null}
           <Field label="Beneficiario">
-            <Select value={beneficiarioId} onChange={(event) => setBeneficiarioId(event.target.value)} required disabled={!canCreate}>
+            <Select value={beneficiarioId} onChange={(event) => setBeneficiarioId(event.target.value)} required disabled={!canCreate || Boolean(editing)}>
               <option value="">Selecione</option>
-              {data.beneficiarios.map((beneficiario) => (
+              {options.beneficiarios.map((beneficiario) => (
                 <option key={beneficiario.id} value={beneficiario.id}>
                   {beneficiario.name}
                 </option>
@@ -503,10 +547,20 @@ function Consultas({
               disabled={!canCreate}
             />
           </Field>
+          {editing ? <><p className="text-sm">Horario atual: {formatDateTime(editing.dataHora)}</p><Button type="button" variant="outline" disabled={busy} onClick={() => { setEditing(null); setBeneficiarioId(""); setDataHora(""); }}>Cancelar</Button></> : null}
         </FormCard>
       }
     >
-      {data.consultas.length ? (
+      <div className="mb-4 grid gap-3 sm:grid-cols-2">
+        <Field label="Medico"><Select value={String(listing.filters.medicoId ?? "")} onChange={event => listing.filter("medicoId", event.target.value)}><option value="">Todos</option>{options.medicos.map(item => <option key={item.id} value={item.id}>{item.user.name}</option>)}</Select></Field>
+        <Field label="Beneficiario"><Select value={String(listing.filters.beneficiarioId ?? "")} onChange={event => listing.filter("beneficiarioId", event.target.value)}><option value="">Todos</option>{options.beneficiarios.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field>
+        <Field label="De"><Input type="datetime-local" value={fromIso(listing.filters.startDate)} onChange={event => listing.filter("startDate", event.target.value ? toIsoFromLocalDateTime(event.target.value) : "")} /></Field>
+        <Field label="Ate"><Input type="datetime-local" value={fromIso(listing.filters.endDate)} onChange={event => listing.filter("endDate", event.target.value ? toIsoFromLocalDateTime(event.target.value) : "")} /></Field>
+        <Button variant="outline" onClick={listing.clear}>Limpar filtros</Button>
+      </div>
+      {options.error ? <p role="alert">{options.error}</p> : null}
+      <ListStatus listing={listing} />
+      {listing.data.length ? (
         <Table>
           <TableHeader>
             <TableRow>
@@ -517,7 +571,7 @@ function Consultas({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.consultas.map((consulta) => {
+            {listing.data.map((consulta) => {
               const canEdit = session.user.role === "MEDICO" && consulta.medico.userId === session.user.id;
 
               return (
@@ -526,7 +580,8 @@ function Consultas({
                   <TableCell>{consulta.beneficiario.name}</TableCell>
                   <TableCell>{consulta.medico.user.name}</TableCell>
                   <TableCell>
-                    <Button
+                    {canEdit ? <Button variant="outline" size="sm" disabled={busy} onClick={() => { setEditing(consulta); setBeneficiarioId(consulta.beneficiarioId); setDataHora(fromIso(consulta.dataHora)); }}>Reagendar</Button> : null}
+                    <DeleteButton
                       variant="ghost"
                       size="icon"
                       aria-label="Remover consulta"
@@ -534,7 +589,7 @@ function Consultas({
                       onClick={() => runAction(() => endpoints.deleteConsulta(consulta.id), "Consulta removida.")}
                     >
                       <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </DeleteButton>
                   </TableCell>
                 </TableRow>
               );
@@ -559,24 +614,28 @@ function Aulas({
   busy: boolean;
   runAction: (action: () => Promise<unknown>, success: string) => Promise<void>;
 }) {
+  const listing = useListing<Aula>("aulas", data);
+  const options = useOptions(data, "aulas");
+  const [editing, setEditing] = useState<Aula | null>(null);
   const [titulo, setTitulo] = useState("");
   const [modalidade, setModalidade] = useState("");
   const [vagas, setVagas] = useState("10");
   const [selectedAulaId, setSelectedAulaId] = useState<string | null>(null);
   const canCreate = session.user.role === "INSTRUTOR";
-  const selectedAula = data.aulas.find((aula) => aula.id === selectedAulaId) ?? null;
-  const selectedMatriculados = selectedAula
-    ? data.matriculas.filter((matricula) => matricula.aulaId === selectedAula.id)
-    : [];
+  const selectedAula = listing.data.find((aula) => aula.id === selectedAulaId) ?? null;
+  const enrolled = useListing<Matricula>("matriculas", selectedAulaId, Boolean(selectedAulaId));
+  const selectedMatriculados = selectedAulaId && enrolled.filters.aulaId === selectedAulaId ? enrolled.data : [];
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      await endpoints.createAula({ titulo, modalidade, vagas: Number(vagas) });
+      if (editing) await endpoints.updateAula(editing.id, { titulo, modalidade, vagas: Number(vagas) });
+      else await endpoints.createAula({ titulo, modalidade, vagas: Number(vagas) });
+      setEditing(null);
       setTitulo("");
       setModalidade("");
       setVagas("10");
-    }, "Aula criada.");
+    }, "Aula salva.");
   }
 
   return (
@@ -584,7 +643,7 @@ function Aulas({
       title="Aulas"
       description="Instrutores criam aulas; vagas disponiveis sao calculadas por vagas menos matriculas."
       aside={
-        <FormCard title="Nova aula" onSubmit={submit} busy={busy || !canCreate} submitLabel="Criar aula">
+        <FormCard title={editing ? "Editar aula" : "Nova aula"} onSubmit={submit} busy={busy || !canCreate} submitLabel={editing ? "Salvar" : "Criar aula"}>
           {!canCreate ? <p className="text-sm text-muted-foreground">Apenas contas com perfil de instrutor podem criar aulas.</p> : null}
           <Field label="Titulo">
             <Input value={titulo} onChange={(event) => setTitulo(event.target.value)} required disabled={!canCreate} />
@@ -602,10 +661,19 @@ function Aulas({
               disabled={!canCreate}
             />
           </Field>
+          {editing ? <Button type="button" variant="outline" disabled={busy} onClick={() => { setEditing(null); setTitulo(""); setModalidade(""); setVagas("10"); }}>Cancelar</Button> : null}
         </FormCard>
       }
     >
-      {data.aulas.length ? (
+      <div className="mb-4 grid gap-3 sm:grid-cols-2">
+        <Field label="Instrutor"><Select value={String(listing.filters.instrutorId ?? "")} onChange={event => listing.filter("instrutorId", event.target.value)}><option value="">Todos</option>{options.instrutores.map(item => <option key={item.id} value={item.id}>{item.user.name}</option>)}</Select></Field>
+        <Field label="Modalidade"><Input value={String(listing.filters.modalidade ?? "")} onChange={event => listing.filter("modalidade", event.target.value)} maxLength={120} /></Field>
+        <Field label="Disponibilidade"><Select value={String(listing.filters.available ?? "")} onChange={event => listing.filter("available", event.target.value)}><option value="">Todas</option><option value="true">Com vagas</option><option value="false">Lotadas</option></Select></Field>
+        <Button variant="outline" onClick={listing.clear}>Limpar filtros</Button>
+      </div>
+      {options.error ? <p role="alert">{options.error}</p> : null}
+      <ListStatus listing={listing} />
+      {listing.data.length ? (
         <Table>
           <TableHeader>
             <TableRow>
@@ -618,10 +686,10 @@ function Aulas({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.aulas.map((aula) => {
+            {listing.data.map((aula) => {
               const disponiveis = getAulaDisponiveis(aula);
               const canEdit = session.user.role === "INSTRUTOR" && aula.instrutor.userId === session.user.id;
-              const matriculados = data.matriculas.filter((matricula) => matricula.aulaId === aula.id);
+
 
               return (
                 <TableRow key={aula.id}>
@@ -629,9 +697,9 @@ function Aulas({
                   <TableCell>{aula.modalidade}</TableCell>
                   <TableCell>{aula.instrutor.user.name}</TableCell>
                   <TableCell>
-                    <Button variant="outline" size="sm" type="button" onClick={() => setSelectedAulaId(aula.id)}>
+                    <Button variant="outline" size="sm" type="button" onClick={() => { setSelectedAulaId(aula.id); enrolled.filter("aulaId", aula.id); }}>
                       Ver matriculados
-                      <Badge variant="secondary">{matriculados.length}</Badge>
+                      <Badge variant="secondary">{aula._count.matriculas}</Badge>
                     </Button>
                   </TableCell>
                   <TableCell>
@@ -640,7 +708,8 @@ function Aulas({
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Button
+                    {canEdit ? <Button variant="outline" size="sm" disabled={busy} onClick={() => { setEditing(aula); setTitulo(aula.titulo); setModalidade(aula.modalidade); setVagas(String(aula.vagas)); }}>Editar aula</Button> : null}
+                    <DeleteButton
                       variant="ghost"
                       size="icon"
                       aria-label="Remover aula"
@@ -648,7 +717,7 @@ function Aulas({
                       onClick={() => runAction(() => endpoints.deleteAula(aula.id), "Aula removida.")}
                     >
                       <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </DeleteButton>
                   </TableCell>
                 </TableRow>
               );
@@ -670,9 +739,10 @@ function Aulas({
               <Badge variant={getAulaDisponiveis(selectedAula) > 0 ? "secondary" : "destructive"}>
                 {getAulaDisponiveis(selectedAula)} vagas disponiveis
               </Badge>
-              <Badge variant="outline">{selectedMatriculados.length} matriculados</Badge>
+              <Badge variant="outline">{selectedAula._count.matriculas} matriculados</Badge>
             </div>
 
+            <ListStatus listing={enrolled} />
             {selectedMatriculados.length ? (
               <Table>
                 <TableHeader>
@@ -711,18 +781,23 @@ function Matriculas({
   busy: boolean;
   runAction: (action: () => Promise<unknown>, success: string) => Promise<void>;
 }) {
+  const listing = useListing<Matricula>("matriculas", data);
+  const options = useOptions(data, "matriculas");
+  const [editing, setEditing] = useState<Matricula | null>(null);
   const [beneficiarioId, setBeneficiarioId] = useState("");
   const [aulaId, setAulaId] = useState("");
 
-  const aulasDisponiveis = useMemo(() => data.aulas.filter((aula) => getAulaDisponiveis(aula) > 0), [data.aulas]);
+  const aulasDisponiveis = useMemo(() => options.aulas.filter((aula) => getAulaDisponiveis(aula) > 0 || aula.id === editing?.aulaId), [options.aulas, editing]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      await endpoints.createMatricula({ beneficiarioId, aulaId });
+      if (editing) await endpoints.updateMatricula(editing.id, { beneficiarioId, aulaId });
+      else await endpoints.createMatricula({ beneficiarioId, aulaId });
+      setEditing(null);
       setBeneficiarioId("");
       setAulaId("");
-    }, "Matricula criada.");
+    }, "Matricula salva.");
   }
 
   return (
@@ -730,11 +805,11 @@ function Matriculas({
       title="Matriculas"
       description="A tela bloqueia aulas cheias, mas o backend continua validando vagas e duplicidade."
       aside={
-        <FormCard title="Nova matricula" onSubmit={submit} busy={busy} submitLabel="Matricular">
+        <FormCard title={editing ? "Editar matricula" : "Nova matricula"} onSubmit={submit} busy={busy} submitLabel={editing ? "Salvar" : "Matricular"}>
           <Field label="Beneficiario">
             <Select value={beneficiarioId} onChange={(event) => setBeneficiarioId(event.target.value)} required>
               <option value="">Selecione</option>
-              {data.beneficiarios.map((beneficiario) => (
+              {options.beneficiarios.map((beneficiario) => (
                 <option key={beneficiario.id} value={beneficiario.id}>
                   {beneficiario.name}
                 </option>
@@ -751,10 +826,13 @@ function Matriculas({
               ))}
             </Select>
           </Field>
+          {editing ? <Button type="button" variant="outline" disabled={busy} onClick={() => { setEditing(null); setBeneficiarioId(""); setAulaId(""); }}>Cancelar</Button> : null}
         </FormCard>
       }
     >
-      {data.matriculas.length ? (
+      {options.error ? <p role="alert">{options.error}</p> : null}
+      <ListStatus listing={listing} />
+      {listing.data.length ? (
         <Table>
           <TableHeader>
             <TableRow>
@@ -765,13 +843,14 @@ function Matriculas({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.matriculas.map((matricula: Matricula) => (
+            {listing.data.map((matricula: Matricula) => (
               <TableRow key={matricula.id}>
                 <TableCell className="font-medium">{matricula.beneficiario.name}</TableCell>
                 <TableCell>{matricula.aula.titulo}</TableCell>
                 <TableCell>{formatDateTime(matricula.createdAt)}</TableCell>
                 <TableCell>
-                  <Button
+                  <Button variant="outline" size="sm" disabled={busy} onClick={() => { setEditing(matricula); setBeneficiarioId(matricula.beneficiarioId); setAulaId(matricula.aulaId); }}>Editar matricula</Button>
+                  <DeleteButton
                     variant="ghost"
                     size="icon"
                     aria-label="Remover matricula"
@@ -779,7 +858,7 @@ function Matriculas({
                     onClick={() => runAction(() => endpoints.deleteMatricula(matricula.id), "Matricula removida.")}
                   >
                     <Trash2 className="h-4 w-4" />
-                  </Button>
+                  </DeleteButton>
                 </TableCell>
               </TableRow>
             ))}
@@ -811,6 +890,7 @@ function Admin({
   setMessage: Dispatch<SetStateAction<string | null>>;
   runAction: (action: () => Promise<unknown>, success: string) => Promise<void>;
 }) {
+  const [editing, setEditing] = useState<User | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -848,11 +928,18 @@ function Admin({
   async function submitUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      await endpoints.createUser({ name, email, password });
+      const updated = editing ? await endpoints.updateUser(editing.id, { name, email }) : await endpoints.createUser({ name, email, password });
+      if (editing?.id === session.user.id) {
+        const nextSession = { ...session, user: { ...session.user, name: updated.name, email: updated.email } };
+        saveSession(nextSession); setSession(nextSession);
+      }
+      const adminData = await endpoints.getAdminData();
+      setData(current => ({ ...current, ...adminData }));
+      setEditing(null);
       setName("");
       setEmail("");
       setPassword("");
-    }, "Usuario criado sem perfil.");
+    }, "Usuario salvo.");
   }
 
   async function submitProfile(event: FormEvent<HTMLFormElement>) {
@@ -861,6 +948,8 @@ function Admin({
       if (profile === "medico") await endpoints.createMedico(userId);
       else await endpoints.createInstrutor(userId);
       setUserId("");
+      const adminData = await endpoints.getAdminData();
+      setData(current => ({ ...current, ...adminData }));
     }, "Perfil vinculado ao usuario.");
   }
 
@@ -892,7 +981,7 @@ function Admin({
                     <TableRow>
                       <TableHead>Nome</TableHead>
                       <TableHead>Email</TableHead>
-                      <TableHead>Perfil</TableHead>
+                      <TableHead>Perfil</TableHead><TableHead>Acoes</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -905,6 +994,10 @@ function Admin({
                             {user.medico ? "Medico" : user.instrutor ? "Instrutor" : "Sem perfil"}
                           </Badge>
                         </TableCell>
+                        <TableCell>
+                          <Button variant="outline" size="sm" disabled={busy} onClick={() => { setEditing(user); setName(user.name); setEmail(user.email); setPassword(""); }}>Editar</Button>
+                          <DeleteButton disabled={busy} onClick={() => runAction(async () => { await endpoints.deleteUser(user.id); const adminData = await endpoints.getAdminData(); setData(current => ({ ...current, ...adminData })); }, "Usuario removido.")}><Trash2 className="h-4 w-4" /></DeleteButton>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -916,14 +1009,14 @@ function Admin({
           </Card>
 
           <div className="grid gap-5">
-            <FormCard title="Criar usuario sem perfil" onSubmit={submitUser} busy={busy} submitLabel="Criar usuario">
+            <FormCard title={editing ? "Editar usuario" : "Criar usuario sem perfil"} onSubmit={submitUser} busy={busy} submitLabel={editing ? "Salvar" : "Criar usuario"}>
               <Field label="Nome">
                 <Input value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} />
               </Field>
               <Field label="Email">
                 <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
               </Field>
-              <Field label="Senha">
+              {!editing ? <Field label="Senha">
                 <Input
                   type="password"
                   value={password}
@@ -932,7 +1025,8 @@ function Admin({
                   minLength={8}
                   maxLength={72}
                 />
-              </Field>
+              </Field> : null}
+              {editing ? <Button type="button" variant="outline" disabled={busy} onClick={() => { setEditing(null); setName(""); setEmail(""); setPassword(""); }}>Cancelar</Button> : null}
             </FormCard>
 
             <FormCard title="Vincular perfil" onSubmit={submitProfile} busy={busy} submitLabel="Vincular">
@@ -982,6 +1076,12 @@ function MyAccount({
   const [email, setEmail] = useState(session.user.email);
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
+  const canEdit = session.user.role === "MEDICO" || session.user.role === "INSTRUTOR";
+
+  useEffect(() => {
+    setName(session.user.name);
+    setEmail(session.user.email);
+  }, [session.user.name, session.user.email]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1048,7 +1148,7 @@ function MyAccount({
             />
           </Field>
           <div className="flex items-end">
-            <Button className="w-full lg:w-auto" disabled={saving} type="submit">
+            <Button className="w-full lg:w-auto" disabled={saving || !canEdit} type="submit">
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Salvar
             </Button>
@@ -1180,6 +1280,55 @@ function Modal({
       </div>
     </div>
   );
+}
+
+function fromIso(value: string | number | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+function useOptions(revision: unknown, resource: "consultas" | "aulas" | "matriculas") {
+  const [options, setOptions] = useState<{ beneficiarios: Beneficiario[]; aulas: Aula[]; medicos: Medico[]; instrutores: Instrutor[]; error: string }>({ beneficiarios: [], aulas: [], medicos: [], instrutores: [], error: "" });
+  useEffect(() => {
+    const controller = new AbortController();
+    Promise.all([
+      resource !== "aulas" ? endpoints.all<Beneficiario>("beneficiarios", {}, controller.signal) : Promise.resolve([]),
+      resource === "matriculas" ? endpoints.all<Aula>("aulas", {}, controller.signal) : Promise.resolve([]),
+      resource === "consultas" ? api<Medico[]>("/medicos", { signal: controller.signal }) : Promise.resolve([]),
+      resource === "aulas" ? api<Instrutor[]>("/instrutores", { signal: controller.signal }) : Promise.resolve([]),
+    ]).then(([beneficiarios, aulas, medicos, instrutores]) => {
+      if (!controller.signal.aborted) setOptions({ beneficiarios, aulas, medicos, instrutores, error: "" });
+    }).catch(error => { if (!controller.signal.aborted) setOptions(current => ({ ...current, error: normalizeApiError(error) })); });
+    return () => controller.abort();
+  }, [revision, resource]);
+  return options;
+}
+
+function ListStatus({ listing }: { listing: { loading: boolean; error: string; page: number; total: number; totalPages: number; go: (page: number) => void } }) {
+  return <div className="mb-4 grid gap-2" aria-live="polite">
+    {listing.loading ? <p className="text-sm">Carregando...</p> : null}
+    {listing.error ? <p role="alert" className="text-sm text-destructive">{listing.error}</p> : null}
+    <div className="flex flex-wrap items-center gap-3">
+      <Button variant="outline" size="sm" disabled={listing.loading || listing.page <= 1} onClick={() => listing.go(listing.page - 1)}>Anterior</Button>
+      <span className="text-sm">Pagina {listing.page} de {Math.max(1, listing.totalPages)} · {listing.total} resultados</span>
+      <Button variant="outline" size="sm" disabled={listing.loading || listing.page >= listing.totalPages} onClick={() => listing.go(listing.page + 1)}>Proxima</Button>
+    </div>
+  </div>;
+}
+
+function DeleteButton({ onClick, children, ...props }: Omit<ComponentProps<typeof Button>, "onClick"> & { onClick: () => Promise<void> }) {
+  const [confirming, setConfirming] = useState(false);
+  return <>
+    <Button {...props} type="button" onClick={() => setConfirming(true)}>{children}</Button>
+    {confirming ? <Modal title="Confirmar exclusao" onClose={() => { if (!props.disabled) setConfirming(false); }}>
+      <p className="mb-4">Deseja excluir este registro? Esta operacao nao pode ser desfeita.</p>
+      <div className="flex gap-3">
+        <Button type="button" disabled={props.disabled} onClick={async () => { await onClick(); setConfirming(false); }}>Excluir</Button>
+        <Button type="button" variant="outline" disabled={props.disabled} onClick={() => setConfirming(false)}>Cancelar</Button>
+      </div>
+    </Modal> : null}
+  </>;
 }
 
 export default App;

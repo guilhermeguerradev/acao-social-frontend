@@ -74,6 +74,7 @@ export type Matricula = {
 };
 
 export type DashboardData = {
+  totals?: { beneficiarios: number; consultas: number; aulas: number; matriculas: number; availableAulas: number };
   beneficiarios: Beneficiario[];
   consultas: Consulta[];
   aulas: Aula[];
@@ -85,3 +86,53 @@ export type DashboardData = {
 };
 
 export type AdminData = Pick<DashboardData, "users" | "medicos" | "instrutores" | "errors">;
+
+export type Page<T> = { data: T[]; page: number; limit: number; total: number; totalPages: number };
+export type ListParams = Record<string, string | number | undefined>;
+
+export type Demand = {
+  id: string;
+  description: string;
+  status: "RECEIVED";
+  requesterId: string;
+  requester: { id: string; name: string };
+  createdAt: string;
+  phone: string | null;
+  neighborhood: string | null;
+  returnPreference: DemandReturnPreference | null;
+  category: DemandCategory | null;
+  otherDescription: string | null;
+  urgent: boolean | null;
+  contactConsentAt: string | null;
+  contactConsentVersion: string | null;
+  contactConsentText: string | null;
+};
+
+export type DemandCategory = "FOOD" | "CLOTHING" | "HYGIENE" | "HEALTH" | "EDUCATION" | "SOCIAL_ASSISTANCE" | "OTHER";
+export type DemandReturnPreference = "WHATSAPP" | "PHONE_CALL";
+export type DemandOptions = {
+  categories: Array<{ value: DemandCategory; label: string }>;
+  returnPreferences: Array<{ value: DemandReturnPreference; label: string }>;
+  consent: { version: string; text: string };
+};
+export type DemandDraft = {
+  description: string;
+  phone: string;
+  neighborhood: string;
+  returnPreference: DemandReturnPreference | "";
+  category: DemandCategory | "";
+  otherDescription: string;
+  urgent: "" | "true" | "false";
+  contactConsent: boolean;
+};
+export type CreateDemandPayload = {
+  description: string;
+  requestKey: string;
+  phone: string;
+  neighborhood: string;
+  returnPreference: DemandReturnPreference;
+  category: DemandCategory;
+  otherDescription?: string;
+  urgent: boolean;
+  contactConsent: true;
+};
