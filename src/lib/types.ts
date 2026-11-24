@@ -27,6 +27,8 @@ export type Beneficiario = {
   id: string;
   name: string;
   telefone: string | null;
+  isAluno: boolean;
+  curso: "BOMBEIRO_MIRIM" | null;
   createdAt: string;
 };
 

@@ -23,7 +23,7 @@ export function parseRecord<T>(value: unknown, resource: string): T {
   if (!object(value) || !text(value.id)) return invalid(resource);
   let valid = true;
   switch (resource) {
-    case "beneficiarios": valid = named(value); break;
+    case "beneficiarios": valid = named(value) && typeof value.isAluno === "boolean" && (value.curso == null || value.curso === "BOMBEIRO_MIRIM"); break;
     case "consultas": valid = date(value.dataHora) && named(value.beneficiario) && professional(value.medico); break;
     case "aulas": valid = text(value.titulo) && text(value.modalidade) && integer(value.vagas) && professional(value.instrutor) && object(value._count) && integer(value._count.matriculas); break;
     case "matriculas": valid = text(value.aulaId) && text(value.beneficiarioId) && named(value.beneficiario) && object(value.aula) && text(value.aula.titulo); break;

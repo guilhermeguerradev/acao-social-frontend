@@ -12,9 +12,11 @@ import {
 } from "react";
 import {
   Activity,
+  BarChart3,
   BookOpen,
   CalendarClock,
   GraduationCap,
+  Heart,
   Loader2,
   LogOut,
   type LucideIcon,
@@ -42,7 +44,7 @@ import { CourseCatalog } from "./components/courses/CourseCatalog";
 import { DemandFlow } from "./components/demands/DemandFlow";
 import { DemandManagement } from "./components/demands/DemandManagement";
 
-type ActiveTab = "dashboard" | "apoio" | "demandas" | "cursos" | "beneficiarios" | "consultas" | "aulas" | "matriculas" | "admin";
+type ActiveTab = "dashboard" | "apoio" | "demandas" | "cursos" | "beneficiarios" | "bombeiro-mirim" | "consultas" | "aulas" | "matriculas" | "admin";
 
 const initialData: DashboardData = {
   beneficiarios: [],
@@ -61,6 +63,7 @@ const tabs = [
   { value: "demandas", label: "Demandas" },
   { value: "cursos", label: "Cursos" },
   { value: "beneficiarios", label: "Beneficiarios" },
+  { value: "bombeiro-mirim", label: "Bombeiro Mirim" },
   { value: "consultas", label: "Consultas" },
   { value: "aulas", label: "Aulas" },
   { value: "matriculas", label: "Matriculas" },
@@ -232,6 +235,7 @@ function App() {
         {activeTab === "demandas" ? <DemandManagement role={session.user.role} revision={demandRevision} onRegister={() => setActiveTab("apoio")} /> : null}
         {activeTab === "cursos" ? <CourseCatalog revision={data} /> : null}
         {activeTab === "beneficiarios" ? <Beneficiarios data={data} busy={busy} runAction={runAction} /> : null}
+        {activeTab === "bombeiro-mirim" ? <BombeiroMirim data={data} /> : null}
         {activeTab === "consultas" ? (
           <Consultas data={data} session={session} busy={busy} runAction={runAction} />
         ) : null}
@@ -427,18 +431,19 @@ function Beneficiarios({
 }) {
   const listing = useListing<Beneficiario>("beneficiarios", data);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const cancel = () => { setEditingId(null); setName(""); setTelefone(""); };
   const [name, setName] = useState("");
   const [telefone, setTelefone] = useState("");
+  const [isAluno, setIsAluno] = useState(false);
+  const [curso, setCurso] = useState<"BOMBEIRO_MIRIM" | "">("");
+  const cancel = () => { setEditingId(null); setName(""); setTelefone(""); setIsAluno(false); setCurso(""); };
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      if (editingId) await endpoints.updateBeneficiario(editingId, { name, telefone });
-      else await endpoints.createBeneficiario({ name, telefone });
-      setEditingId(null);
-      setName("");
-      setTelefone("");
+      const payload = { name, telefone, isAluno, curso: isAluno && curso ? curso : null };
+      if (editingId) await endpoints.updateBeneficiario(editingId, payload);
+      else await endpoints.createBeneficiario(payload);
+      cancel();
     }, "Beneficiario salvo.");
   }
 
@@ -454,6 +459,18 @@ function Beneficiarios({
           <Field label="Telefone">
             <Input value={telefone} onChange={(event) => setTelefone(event.target.value)} maxLength={20} />
           </Field>
+          <Field label="Já é aluno?">
+            <Select value={isAluno ? "sim" : "nao"} onChange={(event) => { const enrolled = event.target.value === "sim"; setIsAluno(enrolled); if (!enrolled) setCurso(""); }}>
+              <option value="nao">Não</option>
+              <option value="sim">Sim</option>
+            </Select>
+          </Field>
+          {isAluno ? <Field label="Curso">
+            <Select value={curso} onChange={(event) => setCurso(event.target.value as "BOMBEIRO_MIRIM" | "")} required>
+              <option value="">Selecione o curso</option>
+              <option value="BOMBEIRO_MIRIM">Bombeiro Mirim</option>
+            </Select>
+          </Field> : null}
           {editingId ? <Button type="button" variant="outline" disabled={busy} onClick={cancel}>Cancelar</Button> : null}
         </FormCard>
       }
@@ -466,6 +483,8 @@ function Beneficiarios({
             <TableRow>
               <TableHead>Nome</TableHead>
               <TableHead>Telefone</TableHead>
+              <TableHead>Aluno</TableHead>
+              <TableHead>Curso</TableHead>
               <TableHead>Criado em</TableHead>
               <TableHead className="w-16"></TableHead>
             </TableRow>
@@ -475,9 +494,11 @@ function Beneficiarios({
               <TableRow key={beneficiario.id}>
                 <TableCell className="font-medium">{beneficiario.name}</TableCell>
                 <TableCell>{beneficiario.telefone || "-"}</TableCell>
+                <TableCell><Badge variant={beneficiario.isAluno ? "default" : "outline"}>{beneficiario.isAluno ? "Sim" : "Não"}</Badge></TableCell>
+                <TableCell>{beneficiario.curso === "BOMBEIRO_MIRIM" ? "Bombeiro Mirim" : "-"}</TableCell>
                 <TableCell>{formatDateTime(beneficiario.createdAt)}</TableCell>
                 <TableCell>
-                  <Button variant="outline" size="sm" disabled={busy} onClick={() => { setEditingId(beneficiario.id); setName(beneficiario.name); setTelefone(beneficiario.telefone ?? ""); }}>Editar</Button>
+                  <Button variant="outline" size="sm" disabled={busy} onClick={() => { setEditingId(beneficiario.id); setName(beneficiario.name); setTelefone(beneficiario.telefone ?? ""); setIsAluno(beneficiario.isAluno); setCurso(beneficiario.curso ?? ""); }}>Editar</Button>
                   <DeleteButton
                     variant="ghost"
                     size="icon"
@@ -499,6 +520,59 @@ function Beneficiarios({
       )}
     </ResourceLayout>
   );
+}
+
+function BombeiroMirim({ data }: { data: DashboardData }) {
+  const members = useMemo(() => data.beneficiarios.filter(item => item.isAluno && item.curso === "BOMBEIRO_MIRIM"), [data.beneficiarios]);
+  const phoneCount = members.filter(item => Boolean(item.telefone?.trim())).length;
+  const recentCount = members.filter(item => Date.now() - Date.parse(item.createdAt) <= 30 * 24 * 60 * 60 * 1000).length;
+  const monthly = useMemo(() => {
+    const now = new Date();
+    return Array.from({ length: 6 }, (_, offset) => {
+      const monthDate = new Date(now.getFullYear(), now.getMonth() - (5 - offset), 1);
+      const label = monthDate.toLocaleDateString("pt-BR", { month: "short" });
+      const count = members.filter(item => {
+        const date = new Date(item.createdAt);
+        return date.getMonth() === monthDate.getMonth() && date.getFullYear() === monthDate.getFullYear();
+      }).length;
+      return { label, count };
+    });
+  }, [members]);
+  const maxMonthly = Math.max(1, ...monthly.map(item => item.count));
+  const metrics = [
+    { icon: Users, label: "Alunos no curso", value: members.length, note: "Inscritos em Bombeiro Mirim" },
+    { icon: Heart, label: "Novos nos últimos 30 dias", value: recentCount, note: "Cadastros recentes no curso" },
+    { icon: Activity, label: "Com telefone", value: `${members.length ? Math.round(phoneCount / members.length * 100) : 0}%`, note: `${phoneCount} de ${members.length} alunos` },
+    { icon: GraduationCap, label: "Alunos ativos", value: members.length, note: "Status informado no cadastro" },
+  ];
+  return <div className="grid gap-5">
+    <div>
+      <h2 className="text-2xl font-semibold">Bombeiro Mirim</h2>
+      <p className="text-sm text-muted-foreground">Visão geral dos beneficiários inscritos neste curso.</p>
+    </div>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {metrics.map(metric => <Card key={metric.label}><CardContent className="flex items-start gap-4 p-5">
+        <div className="rounded-lg bg-primary/10 p-2 text-primary"><metric.icon className="h-5 w-5" aria-hidden="true" /></div>
+        <div><p className="text-sm text-muted-foreground">{metric.label}</p><p className="mt-1 text-2xl font-semibold">{metric.value}</p><p className="mt-1 text-xs text-muted-foreground">{metric.note}</p></div>
+      </CardContent></Card>)}
+    </div>
+    <div className="grid gap-5 lg:grid-cols-2">
+      <Card><CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="h-5 w-5" /> Novos alunos por mês</CardTitle><CardDescription>Cadastros dos últimos seis meses.</CardDescription></CardHeader>
+        <CardContent><div className="flex h-48 items-end gap-3" role="img" aria-label="Gráfico de novos alunos por mês">
+          {monthly.map(item => <div key={item.label} className="flex h-full flex-1 flex-col items-center justify-end gap-2"><span className="text-xs text-muted-foreground">{item.count}</span><div className="w-full max-w-12 rounded-t-md bg-primary transition-all" style={{ height: `${Math.max(item.count ? 12 : 3, item.count / maxMonthly * 100)}%` }} /><span className="text-xs capitalize text-muted-foreground">{item.label}</span></div>)}
+        </div></CardContent>
+      </Card>
+      <Card><CardHeader><CardTitle>Contato dos alunos</CardTitle><CardDescription>Cadastro de telefone para acompanhamento.</CardDescription></CardHeader>
+        <CardContent className="grid gap-5">
+          <div className="flex items-center gap-4"><div className="relative grid h-24 w-24 shrink-0 place-items-center rounded-full" style={{ background: `conic-gradient(hsl(var(--primary)) ${members.length ? phoneCount / members.length * 100 : 0}%, hsl(var(--muted)) 0)` }}><div className="grid h-16 w-16 place-items-center rounded-full bg-card text-sm font-semibold">{members.length ? Math.round(phoneCount / members.length * 100) : 0}%</div></div><div className="grid gap-2 text-sm"><p><span className="mr-2 inline-block h-2 w-2 rounded-full bg-primary" />Com telefone <strong>{phoneCount}</strong></p><p><span className="mr-2 inline-block h-2 w-2 rounded-full bg-muted-foreground/30" />Sem telefone <strong>{members.length - phoneCount}</strong></p></div></div>
+          <div className="rounded-lg bg-muted/60 p-3 text-sm text-muted-foreground">{members.length ? `A base do curso conta com ${members.length} beneficiário${members.length === 1 ? "" : "s"}.` : "Ainda não há beneficiários vinculados a este curso. Cadastre um aluno na aba Beneficiários para começar."}</div>
+        </CardContent>
+      </Card>
+    </div>
+    <Card><CardHeader><CardTitle>Alunos do Bombeiro Mirim</CardTitle><CardDescription>{members.length} beneficiário{members.length === 1 ? "" : "s"} vinculado{members.length === 1 ? "" : "s"} ao curso.</CardDescription></CardHeader><CardContent>
+      {members.length ? <Table><TableHeader><TableRow><TableHead>Nome</TableHead><TableHead>Telefone</TableHead><TableHead>Cadastrado em</TableHead></TableRow></TableHeader><TableBody>{members.map(item => <TableRow key={item.id}><TableCell className="font-medium">{item.name}</TableCell><TableCell>{item.telefone || "-"}</TableCell><TableCell>{formatDateTime(item.createdAt)}</TableCell></TableRow>)}</TableBody></Table> : <EmptyState message="Nenhum aluno inscrito no Bombeiro Mirim ainda." />}
+    </CardContent></Card>
+  </div>;
 }
 
 function Consultas({

@@ -143,12 +143,12 @@ export const endpoints = {
       errors: [users, medicos, instrutores].map((item) => item.error).filter((item): item is string => Boolean(item)),
     };
   },
-  createBeneficiario: (payload: { name: string; telefone?: string }) =>
+  createBeneficiario: (payload: { name: string; telefone?: string; isAluno: boolean; curso?: "BOMBEIRO_MIRIM" | null }) =>
     api<Beneficiario>("/beneficiarios", {
       method: "POST",
       body: JSON.stringify({ ...payload, telefone: payload.telefone || undefined }),
     }),
-  updateBeneficiario: (id: string, payload: { name: string; telefone: string }) =>
+  updateBeneficiario: (id: string, payload: { name: string; telefone: string; isAluno: boolean; curso?: "BOMBEIRO_MIRIM" | null }) =>
     api<Beneficiario>(`/beneficiarios/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteUser: (id: string) => api<null>(`/users/${id}`, { method: "DELETE" }),
   promoteAdmin: (id: string) => api<unknown>(`/users/${encodeURIComponent(id)}/promote-admin`, {
